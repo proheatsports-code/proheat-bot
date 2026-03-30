@@ -27,10 +27,10 @@ excel_file = "data.xlsx"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = "gpt-4o-mini"
 
-API_FOOTBALL_KEY = "e2b935940a4ec9d65fdc75f57764da03"
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 
-GNEWS_API_KEY = "101363726f88bf5ae5bded0275a33db8"
+GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 GNEWS_BASE = "https://gnews.io/api/v4"
 
 OPEN_METEO_GEOCODING_BASE = "https://geocoding-api.open-meteo.com/v1/search"
