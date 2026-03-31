@@ -39,10 +39,13 @@ OPEN_METEO_FORECAST_BASE = "https://api.open-meteo.com/v1/forecast"
 SPORT_IA_USAGE_FILE = "sport_ia_usage.json"
 SPORT_IA_CACHE_FILE = "sport_ia_cache.json"
 SPORT_IA_DAILY_LIMIT = 10
+
 MX_TZ = ZoneInfo("America/Mexico_City")
 
 NEWS_LOOKBACK_DAYS = 5
 MAX_NEWS_ITEMS = 6
+GNEWS_MAX_ARTICLES = 6
+RECENT_FIXTURES_COUNT = 5
 TEAM_MATCH_THRESHOLD = 58
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY and "PON_AQUI" not in OPENAI_API_KEY else None
@@ -306,7 +309,7 @@ def read_sheet(sheet_name):
         return f"❌ Error:\n{str(e)}"
 
 # =========================
-# SPORT IA HELPERS
+# HELPERS TEXTO / EQUIPOS
 # =========================
 
 def limpiar_texto(texto):
@@ -316,6 +319,13 @@ def limpiar_texto(texto):
     texto = re.sub(r"[^a-z0-9\s]", " ", texto)
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto
+
+def clean_text(text):
+    if not text:
+        return ""
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 TEAM_ALIASES = {
     "real madrid": ["real madrid", "realmadrid", "rmadrid", "real"],
@@ -416,6 +426,16 @@ def generate_search_queries(team_name):
 
     return queries
 
+def parse_match_input(text):
+    parts = re.split(r"\s+vs\s+|\s+v\s+|\s*-\s*", text.strip(), maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None, None
+    return parts[0].strip(), parts[1].strip()
+
+# =========================
+# API HELPERS
+# =========================
+
 def api_football_get(endpoint, params=None):
     if not API_FOOTBALL_KEY or "PON_AQUI" in API_FOOTBALL_KEY:
         return None
@@ -431,7 +451,8 @@ def api_football_get(endpoint, params=None):
         )
         response.raise_for_status()
         return response.json()
-    except Exception:
+    except Exception as e:
+        print(f"[API_FOOTBALL] {endpoint} -> {e}")
         return None
 
 def gnews_get(endpoint, params=None):
@@ -449,14 +470,9 @@ def gnews_get(endpoint, params=None):
         )
         response.raise_for_status()
         return response.json()
-    except Exception:
+    except Exception as e:
+        print(f"[GNEWS] {endpoint} -> {e}")
         return None
-
-def parse_match_input(text):
-    parts = re.split(r"\s+vs\s+|\s+v\s+|\s*-\s*", text.strip(), maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) != 2:
-        return None, None
-    return parts[0].strip(), parts[1].strip()
 
 def score_team_candidate(team_name, item):
     variants = [limpiar_texto(v) for v in expand_team_variants(team_name)]
@@ -529,7 +545,7 @@ def search_team(team_name):
         "venue_name": venue.get("name", "")
     }
 
-def get_recent_fixtures(team_id, last_n=5):
+def get_recent_fixtures(team_id, last_n=RECENT_FIXTURES_COUNT):
     data = api_football_get("fixtures", {"team": team_id, "last": last_n})
     if not data or "response" not in data:
         return []
