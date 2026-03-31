@@ -1,8 +1,6 @@
 import os
 import re
 import json
-import math
-import time
 import logging
 import hashlib
 import unicodedata
@@ -29,12 +27,16 @@ from telegram.ext import (
 )
 
 # =========================================================
-# CONFIG GENERAL
+# CONFIG
 # =========================================================
 
 MX_TZ = ZoneInfo("America/Mexico_City")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7696799656"))
+USERS_FILE = os.getenv("USERS_FILE", "usuarios.json")
+EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
@@ -47,21 +49,18 @@ GNEWS_BASE = "https://gnews.io/api/v4"
 OPEN_METEO_GEOCODING_BASE = "https://geocoding-api.open-meteo.com/v1/search"
 OPEN_METEO_FORECAST_BASE = "https://api.open-meteo.com/v1/forecast"
 
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7696799656"))
-USERS_FILE = os.getenv("USERS_FILE", "usuarios.json")
 SPORT_IA_USAGE_FILE = os.getenv("SPORT_IA_USAGE_FILE", "sport_ia_usage.json")
 SPORT_IA_CACHE_FILE = os.getenv("SPORT_IA_CACHE_FILE", "sport_ia_cache.json")
-EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")
-
 SPORT_IA_DAILY_LIMIT = int(os.getenv("SPORT_IA_DAILY_LIMIT", "10"))
-NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "5"))
-MAX_NEWS_ITEMS = int(os.getenv("MAX_NEWS_ITEMS", "6"))
-GNEWS_MAX_ARTICLES = int(os.getenv("GNEWS_MAX_ARTICLES", "6"))
+
+NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "6"))
+MAX_NEWS_ITEMS = int(os.getenv("MAX_NEWS_ITEMS", "8"))
+GNEWS_MAX_ARTICLES = int(os.getenv("GNEWS_MAX_ARTICLES", "8"))
 RECENT_FIXTURES_COUNT = int(os.getenv("RECENT_FIXTURES_COUNT", "5"))
 TEAM_MATCH_THRESHOLD = int(os.getenv("TEAM_MATCH_THRESHOLD", "58"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
-
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s | %(levelname)s | %(message)s"
@@ -71,7 +70,7 @@ logger = logging.getLogger("proheat-bot")
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # =========================================================
-# MENÚS
+# MENU
 # =========================================================
 
 menu = [
@@ -103,7 +102,7 @@ sheet_titles = {
 }
 
 # =========================================================
-# ALIAS / LIMPIEZA DE EQUIPOS
+# HELPERS GENERALES
 # =========================================================
 
 TEAM_ALIASES = {
@@ -147,10 +146,6 @@ RUMOR_TERMS = [
     "player ratings", "fantasy", "odds", "betting", "highlights", "recap"
 ]
 
-# =========================================================
-# HELPERS GENERALES
-# =========================================================
-
 def now_mx() -> datetime:
     return datetime.now(MX_TZ)
 
@@ -163,12 +158,21 @@ def safe_int(value: Any, default: int = 0) -> int:
     except Exception:
         return default
 
+def normalize_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
     text = re.sub(r"http\S+", "", str(text))
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+def cut_text(text: str, max_len: int = 180) -> str:
+    text = normalize_spaces(text)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1].rstrip() + "…"
 
 def limpiar_texto(texto: Any) -> str:
     texto = str(texto).lower().strip()
@@ -178,20 +182,14 @@ def limpiar_texto(texto: Any) -> str:
     texto = re.sub(r"\s+", " ", texto).strip()
     return texto
 
-def normalize_spaces(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
-
-def cut_text(text: str, max_len: int = 180) -> str:
-    text = normalize_spaces(text)
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1].rstrip() + "…"
+def hash_key(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 def atomic_write_json(path: str, data: Any) -> None:
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
-    os.replace(tmp_path, path)
+    os.replace(tmp, path)
 
 def load_json_file(path: str, default_value: Any) -> Any:
     if not os.path.exists(path):
@@ -207,11 +205,8 @@ def load_json_file(path: str, default_value: Any) -> Any:
 def save_json_file(path: str, data: Any) -> None:
     atomic_write_json(path, data)
 
-def hash_key(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
 # =========================================================
-# USUARIOS / ACCESOS
+# JSON / USERS / CACHE
 # =========================================================
 
 def load_users() -> Dict[str, Any]:
@@ -236,12 +231,7 @@ def is_allowed(user_id: int) -> bool:
     if user_id == ADMIN_ID:
         return True
     users = load_users()
-    user_data = users.get(str(user_id))
-    return is_user_active(user_data)
-
-# =========================================================
-# USO DIARIO SPORT IA
-# =========================================================
+    return is_user_active(users.get(str(user_id)))
 
 def load_usage() -> Dict[str, Any]:
     return load_json_file(SPORT_IA_USAGE_FILE, {})
@@ -263,10 +253,6 @@ def increment_user_usage(user_id: int) -> None:
 
 def remaining_queries_today(user_id: int) -> int:
     return max(SPORT_IA_DAILY_LIMIT - get_user_usage_today(user_id), 0)
-
-# =========================================================
-# CACHE SPORT IA
-# =========================================================
 
 def load_cache() -> Dict[str, Any]:
     return load_json_file(SPORT_IA_CACHE_FILE, {})
@@ -292,76 +278,12 @@ def save_cached_analysis(match_text: str, result: Dict[str, Any]) -> None:
     key = normalize_cache_key(match_text)
     cache[key] = {
         "date": today_mx(),
-        "result": result,
+        "result": result
     }
     save_cache(cache)
 
 # =========================================================
-# EXCEL
-# =========================================================
-
-def format_cell_value(value: Any) -> str:
-    if pd.isna(value):
-        return ""
-    if isinstance(value, pd.Timestamp):
-        return value.strftime("%H:%M")
-    return str(value).strip()
-
-def read_sheet(sheet_name: str) -> str:
-    try:
-        df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
-        if df.empty:
-            return "⚠️ Sin datos"
-
-        title = sheet_titles.get(sheet_name, sheet_name)
-        text_parts = [title, ""]
-
-        for _, row in df.iterrows():
-            valores = [format_cell_value(x) for x in row if str(format_cell_value(x)).strip()]
-
-            if not valores:
-                continue
-
-            if sheet_name in ["Hoja1", "Hoja2"]:
-                if len(valores) < 3:
-                    continue
-
-                hora = valores[0]
-                liga = valores[1]
-                partido = valores[2]
-
-                block = [
-                    f"⚽ {liga}",
-                    f"⏰ {hora}",
-                    f"🏟️ {partido}",
-                ]
-
-                if len(valores) > 3:
-                    block.append(f"📊 {valores[3]}")
-                if len(valores) > 5:
-                    block.append(f"⚽ L: {valores[4]} | V: {valores[5]}")
-                if len(valores) > 6:
-                    block.append(f"🎯 SoT: {valores[6]}")
-                if len(valores) > 7:
-                    block.append(f"📐 Corners: {valores[7]}")
-                if len(valores) > 8:
-                    block.append(f"🟨 Tarjetas: {valores[8]}")
-
-                text_parts.append("\n".join(block))
-                text_parts.append("━━━━━━━━━━━━━━━")
-                text_parts.append("")
-            else:
-                text_parts.append("• " + " | ".join(valores))
-                text_parts.append("")
-
-        return "\n".join(text_parts).strip()
-
-    except Exception as e:
-        logger.exception("Error leyendo Excel")
-        return f"❌ Error leyendo Excel:\n{str(e)}"
-
-# =========================================================
-# GUÍA
+# GUIA
 # =========================================================
 
 def guia_texto() -> str:
@@ -391,7 +313,7 @@ def guia_texto() -> str:
         "🔥🟠 *Picks Inferno*\n"
         "Selección premium basada en análisis completo del día.\n\n"
         "🤖 *ProHeat Sport IA*\n"
-        "Análisis bajo demanda de partidos usando datos deportivos y el motor ProHeat Sports.\n"
+        "Análisis bajo demanda de partidos usando datos deportivos, noticias recientes y el motor ProHeat Sports.\n"
         f"Límite: {SPORT_IA_DAILY_LIMIT} consultas por usuario al día.\n\n"
         "📈 *RECOMENDACIÓN*\n"
         "Gestiona tu banca con disciplina.\n"
@@ -399,7 +321,71 @@ def guia_texto() -> str:
     )
 
 # =========================================================
-# PARSEO DE PARTIDO
+# EXCEL
+# =========================================================
+
+def format_cell_value(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%H:%M")
+    return str(value).strip()
+
+def read_sheet(sheet_name: str) -> str:
+    try:
+        df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
+        if df.empty:
+            return "⚠️ Sin datos"
+
+        title = sheet_titles.get(sheet_name, sheet_name)
+        parts = [title, ""]
+
+        for _, row in df.iterrows():
+            valores = [format_cell_value(x) for x in row if format_cell_value(x)]
+
+            if not valores:
+                continue
+
+            if sheet_name in ["Hoja1", "Hoja2"]:
+                if len(valores) < 3:
+                    continue
+
+                hora = valores[0]
+                liga = valores[1]
+                partido = valores[2]
+
+                block = [
+                    f"⚽ {liga}",
+                    f"⏰ {hora}",
+                    f"🏟️ {partido}",
+                ]
+
+                if len(valores) > 3:
+                    block.append(f"📊 {valores[3]}")
+                if len(valores) > 5:
+                    block.append(f"⚽ L: {valores[4]} | V: {valores[5]}")
+                if len(valores) > 6:
+                    block.append(f"🎯 SoT: {valores[6]}")
+                if len(valores) > 7:
+                    block.append(f"📐 Corners: {valores[7]}")
+                if len(valores) > 8:
+                    block.append(f"🟨 Tarjetas: {valores[8]}")
+
+                parts.append("\n".join(block))
+                parts.append("━━━━━━━━━━━━━━━")
+                parts.append("")
+            else:
+                parts.append("• " + " | ".join(valores))
+                parts.append("")
+
+        return "\n".join(parts).strip()
+
+    except Exception as e:
+        logger.exception("Error leyendo Excel")
+        return f"❌ Error:\n{str(e)}"
+
+# =========================================================
+# PARSEO PARTIDO / EQUIPOS
 # =========================================================
 
 def parse_match_input(text: str) -> Tuple[Optional[str], Optional[str]]:
@@ -417,7 +403,7 @@ def expand_team_variants(team_name: str) -> List[str]:
     variants = [
         team_name,
         clean_name,
-        team_name.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u"),
+        team_name.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
     ]
 
     for canonical, aliases in TEAM_ALIASES.items():
@@ -427,10 +413,10 @@ def expand_team_variants(team_name: str) -> List[str]:
     dedup = []
     seen = set()
     for item in variants:
-        item_clean = normalize_spaces(item)
-        if item_clean and item_clean not in seen:
-            seen.add(item_clean)
-            dedup.append(item_clean)
+        item = normalize_spaces(item)
+        if item and item not in seen:
+            seen.add(item)
+            dedup.append(item)
     return dedup
 
 def compact_team_query(name: str) -> str:
@@ -462,7 +448,6 @@ def generate_search_queries(team_name: str) -> List[str]:
             q2 = " ".join(tokens[:2])
             if q2 and q2 not in queries:
                 queries.append(q2)
-
         if len(tokens) >= 1:
             q1 = tokens[0]
             if q1 and q1 not in queries:
@@ -479,6 +464,7 @@ def api_football_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -> 
         return None
 
     headers = {"x-apisports-key": API_FOOTBALL_KEY}
+
     try:
         response = requests.get(
             f"{API_FOOTBALL_BASE}/{endpoint}",
@@ -510,6 +496,10 @@ def gnews_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Optiona
     except Exception as e:
         logger.warning("[GNEWS] %s -> %s", endpoint, e)
         return None
+
+# =========================================================
+# OPEN METEO
+# =========================================================
 
 def geocode_city(city_query: str) -> Optional[Dict[str, Any]]:
     try:
@@ -560,7 +550,7 @@ def get_weather_context(city: str, country: str = "") -> str:
         return "No pude confirmar el clima en la sede."
 
 # =========================================================
-# TEAMS / FIXTURES / H2H / INJURIES
+# API FOOTBALL: TEAMS / FIXTURES / H2H / STANDINGS / STATS
 # =========================================================
 
 def score_team_candidate(team_name: str, item: Dict[str, Any]) -> int:
@@ -577,7 +567,7 @@ def score_team_candidate(team_name: str, item: Dict[str, Any]) -> int:
         api_name,
         f"{api_name} {api_country}".strip(),
         f"{api_name} {api_code}".strip(),
-        f"{api_name} {api_city}".strip(),
+        f"{api_name} {api_city}".strip()
     ]
 
     best = 0
@@ -593,6 +583,7 @@ def score_team_candidate(team_name: str, item: Dict[str, Any]) -> int:
                 common = set(cand.split()) & set(variant.split())
                 score = max(0, 40 + 15 * len(common))
             best = max(best, score)
+
     return best
 
 def search_team(team_name: str) -> Optional[Dict[str, Any]]:
@@ -623,15 +614,13 @@ def search_team(team_name: str) -> Optional[Dict[str, Any]]:
 
     team = best["team"]
     venue = best.get("venue", {})
-    league_country = team.get("country", "")
-
     return {
         "id": team["id"],
         "name": team.get("name", team_name),
-        "country": league_country,
+        "country": team.get("country", ""),
         "code": team.get("code", ""),
         "venue_city": venue.get("city", ""),
-        "venue_name": venue.get("name", ""),
+        "venue_name": venue.get("name", "")
     }
 
 def get_recent_fixtures(team_id: int, last_n: int = RECENT_FIXTURES_COUNT) -> List[Dict[str, Any]]:
@@ -647,8 +636,8 @@ def get_h2h(home_id: int, away_id: int, last_n: int = 5) -> List[Dict[str, Any]]
     return data["response"]
 
 def get_team_injuries(team_id: int) -> List[str]:
-    injuries: List[str] = []
     season_candidates = [now_mx().year, now_mx().year - 1]
+    injuries = []
 
     for season in season_candidates:
         data = api_football_get("injuries", {"team": team_id, "season": season})
@@ -672,7 +661,6 @@ def get_team_injuries(team_id: int) -> List[str]:
         if key and key not in seen:
             seen.add(key)
             clean_items.append(x)
-
     return clean_items[:5]
 
 def summarize_team_form(team_name: str, fixtures: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -683,7 +671,7 @@ def summarize_team_form(team_name: str, fixtures: List[Dict[str, Any]]) -> Dict[
             "draws": 0,
             "losses": 0,
             "gf_avg": 0.0,
-            "ga_avg": 0.0,
+            "ga_avg": 0.0
         }
 
     wins = draws = losses = 0
@@ -721,7 +709,7 @@ def summarize_team_form(team_name: str, fixtures: List[Dict[str, Any]]) -> Dict[
         "draws": draws,
         "losses": losses,
         "gf_avg": round(gf / played, 2) if played else 0.0,
-        "ga_avg": round(ga / played, 2) if played else 0.0,
+        "ga_avg": round(ga / played, 2) if played else 0.0
     }
 
 def get_days_since_last_match(fixtures: List[Dict[str, Any]]) -> Optional[int]:
@@ -762,6 +750,112 @@ def get_last_fixture_context(team_name: str, fixtures: List[Dict[str, Any]]) -> 
     except Exception:
         return f"No pude reconstruir con claridad el último partido de {team_name}."
 
+def detect_primary_league_from_fixtures(fixtures: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not fixtures:
+        return None
+
+    counter = {}
+    latest_by_key = {}
+
+    for fx in fixtures:
+        league = fx.get("league", {})
+        league_id = league.get("id")
+        season = league.get("season")
+        if not league_id or not season:
+            continue
+
+        key = (league_id, season)
+        counter[key] = counter.get(key, 0) + 1
+
+        fx_date = fx.get("fixture", {}).get("date", "")
+        if key not in latest_by_key or fx_date > latest_by_key[key].get("fixture", {}).get("date", ""):
+            latest_by_key[key] = fx
+
+    if not counter:
+        return None
+
+    best_key = sorted(counter.items(), key=lambda x: (-x[1], -x[0][1]))[0][0]
+    best_fx = latest_by_key[best_key]
+    league = best_fx.get("league", {})
+
+    return {
+        "league_id": league.get("id"),
+        "season": league.get("season"),
+        "league_name": league.get("name", ""),
+        "country": league.get("country", "")
+    }
+
+def get_team_standing(team_id: int, league_id: int, season: int) -> Optional[Dict[str, Any]]:
+    data = api_football_get("standings", {"league": league_id, "season": season})
+    if not data or "response" not in data or not data["response"]:
+        return None
+
+    try:
+        standings_groups = data["response"][0]["league"]["standings"]
+        for group in standings_groups:
+            for row in group:
+                if row.get("team", {}).get("id") == team_id:
+                    return {
+                        "rank": row.get("rank"),
+                        "points": row.get("points"),
+                        "goalsDiff": row.get("goalsDiff"),
+                        "group": row.get("group"),
+                        "form": row.get("form"),
+                        "description": row.get("description", "")
+                    }
+    except Exception:
+        return None
+
+    return None
+
+def get_team_statistics(team_id: int, league_id: int, season: int) -> Optional[Dict[str, Any]]:
+    data = api_football_get("teams/statistics", {
+        "league": league_id,
+        "season": season,
+        "team": team_id
+    })
+
+    if not data or "response" not in data:
+        return None
+
+    stats = data["response"]
+    return {
+        "form": stats.get("form", ""),
+        "fixtures": stats.get("fixtures", {}),
+        "goals_for": stats.get("goals", {}).get("for", {}),
+        "goals_against": stats.get("goals", {}).get("against", {}),
+        "clean_sheet": stats.get("clean_sheet", {}),
+        "failed_to_score": stats.get("failed_to_score", {}),
+        "biggest": stats.get("biggest", {}),
+        "league": stats.get("league", {})
+    }
+
+def safe_get_avg_goals(stats_block: Dict[str, Any], side: str) -> str:
+    try:
+        return str(stats_block["average"][side])
+    except Exception:
+        return "N/D"
+
+def build_team_stats_summary(team_name: str, stats: Optional[Dict[str, Any]], standing: Optional[Dict[str, Any]], home_or_away_label: str) -> str:
+    if not stats:
+        return f"No pude recuperar estadísticas amplias de temporada para {team_name}."
+
+    gf_for = safe_get_avg_goals(stats.get("goals_for", {}), "total")
+    ga_against = safe_get_avg_goals(stats.get("goals_against", {}), "total")
+    gf_split = safe_get_avg_goals(stats.get("goals_for", {}), home_or_away_label)
+    ga_split = safe_get_avg_goals(stats.get("goals_against", {}), home_or_away_label)
+
+    rank_txt = ""
+    if standing:
+        rank_txt = f"{team_name} marcha en el lugar {standing.get('rank', 'N/D')} con {standing.get('points', 'N/D')} puntos. "
+
+    lugar = "local" if home_or_away_label == "home" else "visitante"
+    return (
+        f"{rank_txt}"
+        f"Promedia {gf_for} goles a favor y {ga_against} en contra por juego; "
+        f"en condición de {lugar} su split está en {gf_split} a favor y {ga_split} en contra."
+    )
+
 def compute_h2h_summary(home_name: str, away_name: str, h2h: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not h2h:
         return {
@@ -770,15 +864,15 @@ def compute_h2h_summary(home_name: str, away_name: str, h2h: List[Dict[str, Any]
             "away_wins": 0,
             "draws": 0,
             "avg_goals": 0.0,
-            "text": f"No hay H2H reciente confirmado entre {home_name} y {away_name}.",
+            "text": f"No hay H2H reciente confirmado entre {home_name} y {away_name}."
         }
 
     home_wins = away_wins = draws = 0
     total_goals = 0
 
     for fx in h2h:
-        home = fx["teams"]["home"]["name"]
-        away = fx["teams"]["away"]["name"]
+        h = fx["teams"]["home"]["name"]
+        a = fx["teams"]["away"]["name"]
         hg = fx["goals"]["home"] if fx["goals"]["home"] is not None else 0
         ag = fx["goals"]["away"] if fx["goals"]["away"] is not None else 0
         total_goals += hg + ag
@@ -786,19 +880,17 @@ def compute_h2h_summary(home_name: str, away_name: str, h2h: List[Dict[str, Any]
         if hg == ag:
             draws += 1
         else:
-            # evaluar relativo al partido actual
-            if limpiar_texto(home) == limpiar_texto(home_name):
+            if limpiar_texto(h) == limpiar_texto(home_name):
                 if hg > ag:
                     home_wins += 1
                 else:
                     away_wins += 1
-            elif limpiar_texto(away) == limpiar_texto(home_name):
+            elif limpiar_texto(a) == limpiar_texto(home_name):
                 if ag > hg:
                     home_wins += 1
                 else:
                     away_wins += 1
             else:
-                # fallback si el naming no coincide perfecto
                 if hg > ag:
                     home_wins += 1
                 else:
@@ -806,11 +898,6 @@ def compute_h2h_summary(home_name: str, away_name: str, h2h: List[Dict[str, Any]
 
     count = len(h2h)
     avg_goals = round(total_goals / count, 2) if count else 0.0
-    text = (
-        f"En los últimos {count} H2H, {home_name} ganó {home_wins}, "
-        f"{away_name} ganó {away_wins} y hubo {draws} empates; "
-        f"el promedio conjunto fue de {avg_goals} goles."
-    )
 
     return {
         "count": count,
@@ -818,11 +905,15 @@ def compute_h2h_summary(home_name: str, away_name: str, h2h: List[Dict[str, Any]
         "away_wins": away_wins,
         "draws": draws,
         "avg_goals": avg_goals,
-        "text": text,
+        "text": (
+            f"En los últimos {count} H2H, {home_name} ganó {home_wins}, "
+            f"{away_name} ganó {away_wins} y hubo {draws} empates; "
+            f"el promedio conjunto fue de {avg_goals} goles."
+        )
     }
 
 # =========================================================
-# NOTICIAS
+# GNEWS
 # =========================================================
 
 def news_is_noise(title: str, description: str) -> bool:
@@ -832,12 +923,14 @@ def news_is_noise(title: str, description: str) -> bool:
 def dedupe_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     seen = set()
+
     for art in articles:
         key = limpiar_texto(art.get("title", ""))
         if not key or key in seen:
             continue
         seen.add(key)
         out.append(art)
+
     return out
 
 def gnews_search_recent(query: str, days: int = NEWS_LOOKBACK_DAYS, max_articles: int = 10, lang: str = "es") -> List[Dict[str, Any]]:
@@ -858,11 +951,13 @@ def gnews_search_recent(query: str, days: int = NEWS_LOOKBACK_DAYS, max_articles
 
 def collect_team_news(team_name: str) -> List[Dict[str, Any]]:
     queries = [
-        f'"{team_name}" lesion suspension lesionado suspendido rotacion alineacion dt entrenador',
-        f'"{team_name}" descanso viaje conferencia tecnico convocatoria',
+        f'"{team_name}" lesionado OR baja OR suspendido OR convocatoria',
+        f'"{team_name}" entrenador OR dt OR rueda de prensa OR declaraciones',
+        f'"{team_name}" rotacion OR descanso OR calendario OR desgaste',
+        f'"{team_name}" crisis OR presion OR racha OR clasificacion'
     ]
 
-    all_articles: List[Dict[str, Any]] = []
+    all_articles = []
     for q in queries:
         all_articles.extend(gnews_search_recent(q, lang="es"))
         all_articles.extend(gnews_search_recent(q, lang="en"))
@@ -888,9 +983,10 @@ def collect_match_news(home_name: str, away_name: str) -> List[Dict[str, Any]]:
     queries = [
         f'"{home_name}" "{away_name}" lesion suspension lineup preview coach',
         f'"{home_name}" "{away_name}" rotation travel weather',
+        f'"{home_name}" "{away_name}" clasificacion forma previa'
     ]
 
-    all_articles: List[Dict[str, Any]] = []
+    all_articles = []
     for q in queries:
         all_articles.extend(gnews_search_recent(q, lang="es"))
         all_articles.extend(gnews_search_recent(q, lang="en"))
@@ -913,6 +1009,19 @@ def collect_match_news(home_name: str, away_name: str) -> List[Dict[str, Any]]:
 
     return filtered[:MAX_NEWS_ITEMS]
 
+def classify_news_angle(title: str, desc: str) -> str:
+    txt = limpiar_texto(f"{title} {desc}")
+
+    if any(x in txt for x in ["lesion", "lesionado", "baja", "suspendido", "injury", "injured", "absence"]):
+        return "bajas"
+    if any(x in txt for x in ["dt", "entrenador", "coach", "rueda de prensa", "declaraciones", "manager"]):
+        return "dt"
+    if any(x in txt for x in ["rotacion", "descanso", "fatiga", "calendario", "viaje", "travel"]):
+        return "desgaste"
+    if any(x in txt for x in ["racha", "crisis", "presion", "clasificacion", "tabla", "form"]):
+        return "momento"
+    return "general"
+
 def summarize_articles_for_prompt(articles: List[Dict[str, Any]], max_items: int = 4) -> str:
     if not articles:
         return "Sin noticias relevantes recientes confirmadas."
@@ -927,6 +1036,31 @@ def summarize_articles_for_prompt(articles: List[Dict[str, Any]], max_items: int
             lines.append(f"- {title}")
     return "\n".join(lines)
 
+def summarize_news_angles(team_name: str, articles: List[Dict[str, Any]]) -> str:
+    if not articles:
+        return f"Sin noticias relevantes recientes de {team_name}."
+
+    buckets = {
+        "bajas": [],
+        "dt": [],
+        "desgaste": [],
+        "momento": [],
+        "general": []
+    }
+
+    for art in articles:
+        angle = classify_news_angle(art.get("title", ""), art.get("description", ""))
+        snippet = clean_text(f"{art.get('title', '')} — {art.get('description', '')}")
+        if snippet:
+            buckets[angle].append(cut_text(snippet, 170))
+
+    parts = []
+    for key in ["bajas", "dt", "desgaste", "momento", "general"]:
+        if buckets[key]:
+            parts.append(f"{key.upper()}: " + " | ".join(buckets[key][:2]))
+
+    return "\n".join(parts) if parts else f"Sin noticias relevantes recientes de {team_name}."
+
 def extract_news_angles(articles: List[Dict[str, Any]], team_name: str) -> List[str]:
     if not articles:
         return []
@@ -940,11 +1074,12 @@ def extract_news_angles(articles: List[Dict[str, Any]], team_name: str) -> List[
             snippet += f": {desc}"
         snippet = cut_text(snippet, 155)
         if snippet:
-            angles.append(f"En noticias recientes sobre {team_name} destaca que {snippet[0].lower() + snippet[1:] if len(snippet) > 1 else snippet.lower()}.")
+            start = snippet[0].lower() + snippet[1:] if len(snippet) > 1 else snippet.lower()
+            angles.append(f"En noticias recientes sobre {team_name} destaca que {start}.")
     return angles
 
 # =========================================================
-# PROMPT PROHEAT
+# PROMPT
 # =========================================================
 
 def build_proheat_prompt(
@@ -964,15 +1099,19 @@ def build_proheat_prompt(
     away_news_summary: str,
     match_news_summary: str,
     weather_summary: str,
+    home_stats_summary: str,
+    away_stats_summary: str,
+    home_standing: Optional[Dict[str, Any]],
+    away_standing: Optional[Dict[str, Any]]
 ) -> str:
     h2h_lines = []
     for fx in h2h[:5]:
         try:
-            home = fx["teams"]["home"]["name"]
-            away = fx["teams"]["away"]["name"]
+            h = fx["teams"]["home"]["name"]
+            a = fx["teams"]["away"]["name"]
             hg = fx["goals"]["home"]
             ag = fx["goals"]["away"]
-            h2h_lines.append(f"{home} {hg}-{ag} {away}")
+            h2h_lines.append(f"{h} {hg}-{ag} {a}")
         except Exception:
             continue
 
@@ -995,12 +1134,14 @@ Tu tarea es analizar el partido {home_name} vs {away_name} con tono profesional,
 NO escribas relleno, NO repitas ideas y NO hagas frases vacías.
 El análisis debe sentirse específico del partido y apoyarse en los datos entregados.
 
-Usa estas variables:
+Usa:
 - forma reciente
 - promedio de goles a favor y en contra
 - H2H reciente
 - descanso
 - lesiones
+- standings / posición de tabla
+- estadísticas de temporada
 - noticias recientes
 - posibles rotaciones o declaraciones si aparecen
 - clima
@@ -1009,6 +1150,14 @@ Usa estas variables:
 Datos deportivos:
 {home_name}: PJ {home_form['played']}, G {home_form['wins']}, E {home_form['draws']}, P {home_form['losses']}, GF {home_form['gf_avg']}, GC {home_form['ga_avg']}
 {away_name}: PJ {away_form['played']}, G {away_form['wins']}, E {away_form['draws']}, P {away_form['losses']}, GF {away_form['gf_avg']}, GC {away_form['ga_avg']}
+
+Estadísticas ampliadas de temporada:
+{home_name}: {home_stats_summary}
+{away_name}: {away_stats_summary}
+
+Tabla / posición:
+{home_name}: {home_standing if home_standing else 'Sin posición confirmada'}
+{away_name}: {away_standing if away_standing else 'Sin posición confirmada'}
 
 Descanso:
 {rest_text}
@@ -1062,7 +1211,7 @@ Reglas obligatorias:
 """.strip()
 
 # =========================================================
-# PARSEO JSON RESPUESTA OPENAI
+# PARSE JSON
 # =========================================================
 
 def parse_json_response(text: str) -> Dict[str, Any]:
@@ -1075,7 +1224,7 @@ def parse_json_response(text: str) -> Dict[str, Any]:
         raise ValueError("No se pudo parsear JSON válido.")
 
 # =========================================================
-# CONSTRUCCIÓN DE 8 LÍNEAS NO GENÉRICAS
+# 8 LINEAS NO GENERICAS
 # =========================================================
 
 def line_quality_ok(line: str) -> bool:
@@ -1085,7 +1234,7 @@ def line_quality_ok(line: str) -> bool:
     if len(s) < 35:
         return False
 
-    banned_fragments = [
+    banned = [
         "debe leerse con cautela",
         "partido interesante",
         "puede pasar cualquier cosa",
@@ -1094,10 +1243,10 @@ def line_quality_ok(line: str) -> bool:
         "es un duelo parejo",
         "sin duda",
         "sin lugar a dudas",
-        "será clave",
+        "será clave"
     ]
     s_low = limpiar_texto(s)
-    return not any(b in s_low for b in banned_fragments)
+    return not any(b in s_low for b in banned)
 
 def unique_lines(lines: List[str]) -> List[str]:
     out = []
@@ -1127,6 +1276,8 @@ def build_specific_fallback_lines(ctx: Dict[str, Any]) -> List[str]:
     home_news = ctx["home_news"]
     away_news = ctx["away_news"]
     match_news = ctx["match_news"]
+    home_stats_summary = ctx["home_stats_summary"]
+    away_stats_summary = ctx["away_stats_summary"]
 
     lines = []
 
@@ -1134,15 +1285,19 @@ def build_specific_fallback_lines(ctx: Dict[str, Any]) -> List[str]:
         lines.append(
             f"{home} llega con balance de {home_form['wins']}-{home_form['draws']}-{home_form['losses']} y {home_form['gf_avg']} goles a favor por juego, mientras {away} trae {away_form['wins']}-{away_form['draws']}-{away_form['losses']} y {away_form['gf_avg']} de media ofensiva."
         )
-
         lines.append(
             f"En defensa, {home} ha permitido {home_form['ga_avg']} goles por partido en su muestra reciente y {away} concede {away_form['ga_avg']}, dato que ayuda a medir si el cruce apunta a un marcador corto o abierto."
         )
 
+    if home_stats_summary:
+        lines.append(home_stats_summary)
+    if away_stats_summary:
+        lines.append(away_stats_summary)
+
     if h2h_summary["count"] > 0:
         lines.append(h2h_summary["text"])
     else:
-        lines.append(f"No hay una muestra reciente de enfrentamientos directos entre {home} y {away}, así que el peso del análisis recae más en forma, bajas y contexto actual.")
+        lines.append(f"No hay una muestra reciente de enfrentamientos directos entre {home} y {away}, así que el peso del análisis recae más en forma, tabla, bajas y contexto actual.")
 
     if home_rest is not None and away_rest is not None:
         if home_rest > away_rest:
@@ -1184,10 +1339,6 @@ def build_specific_fallback_lines(ctx: Dict[str, Any]) -> List[str]:
         f"Con la información disponible, el guion más probable depende de si {home} logra imponer su tramo fuerte antes del descanso o si {away} consigue llevar el partido a un ritmo más controlado."
     )
 
-    lines.append(
-        f"El cruce no se resume a un dato aislado: forma, descanso, bajas y noticias recientes dibujan una previa más precisa para {home} vs {away}."
-    )
-
     return unique_lines([cut_text(x, 190) for x in lines if x])
 
 def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
@@ -1208,14 +1359,13 @@ def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
         if len(final_lines) == 8:
             break
 
-    # Si aun faltan líneas, completar con plantillas específicas del contexto, no genéricas.
     if len(final_lines) < 8:
         home = ctx["home_name"]
         away = ctx["away_name"]
         extra_templates = [
             f"La comparación reciente entre producción ofensiva de {home} y resistencia defensiva de {away} marca uno de los puntos más sensibles de la previa.",
             f"También habrá que medir si {away} sostiene su plan fuera de casa o si {home} consigue inclinar el partido desde la localía y el primer tramo del juego.",
-            f"Más que un pronóstico vacío, este partido pide leer detalle por detalle: forma corta, bajas activas, descanso y señales recientes del entorno competitivo.",
+            f"Más que un pronóstico vacío, este partido pide leer detalle por detalle: forma corta, tabla, bajas, descanso y señales recientes del entorno competitivo."
         ]
         for line in extra_templates:
             key = limpiar_texto(line)
@@ -1225,10 +1375,8 @@ def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
             if len(final_lines) == 8:
                 break
 
-    # Última protección: exactas 8
     final_lines = final_lines[:8]
 
-    # Si por algún caso extremo siguieran faltando, replicar con matices específicos y no relleno idéntico
     if len(final_lines) < 8:
         home = ctx["home_name"]
         away = ctx["away_name"]
@@ -1236,7 +1384,7 @@ def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
             idx = len(final_lines) + 1
             final_lines.append(
                 cut_text(
-                    f"Ángulo {idx}: la lectura de {home} vs {away} sigue apoyándose en datos concretos de forma, contexto inmediato y disponibilidad del plantel.",
+                    f"Ángulo {idx}: la lectura de {home} vs {away} sigue apoyándose en datos concretos de forma, tabla, contexto inmediato y disponibilidad del plantel.",
                     190
                 )
             )
@@ -1244,7 +1392,7 @@ def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
     return "\n".join(final_lines)
 
 # =========================================================
-# FORMATEO SALIDA
+# FORMATO RESPUESTA
 # =========================================================
 
 def format_sport_ia_picks(home_name: str, away_name: str, payload: Dict[str, Any]) -> str:
@@ -1271,7 +1419,7 @@ def format_sport_ia_blog(payload: Dict[str, Any]) -> str:
     return f"🧠 Nota ProHeat\n\n{payload.get('analisis', 'Sin análisis disponible.')}"
 
 # =========================================================
-# ANÁLISIS SPORT IA
+# SPORT IA
 # =========================================================
 
 def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
@@ -1286,11 +1434,9 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
             home_name, away_name = parse_match_input(match_text)
             if not home_name or not away_name:
                 return None, "⚠️ Escribe el partido así:\nLiverpool vs Galatasaray"
-
-            payload = cached
             return (
-                format_sport_ia_picks(home_name, away_name, payload),
-                format_sport_ia_blog(payload)
+                format_sport_ia_picks(home_name, away_name, cached),
+                format_sport_ia_blog(cached)
             )
         except Exception:
             logger.warning("Cache inválida para %s", match_text)
@@ -1324,20 +1470,55 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
     home_injuries = get_team_injuries(home_team["id"])
     away_injuries = get_team_injuries(away_team["id"])
 
+    home_league_info = detect_primary_league_from_fixtures(home_fixtures)
+    away_league_info = detect_primary_league_from_fixtures(away_fixtures)
+
+    home_standing = None
+    away_standing = None
+    home_stats = None
+    away_stats = None
+
+    if home_league_info:
+        home_standing = get_team_standing(
+            home_team["id"],
+            home_league_info["league_id"],
+            home_league_info["season"]
+        )
+        home_stats = get_team_statistics(
+            home_team["id"],
+            home_league_info["league_id"],
+            home_league_info["season"]
+        )
+
+    if away_league_info:
+        away_standing = get_team_standing(
+            away_team["id"],
+            away_league_info["league_id"],
+            away_league_info["season"]
+        )
+        away_stats = get_team_statistics(
+            away_team["id"],
+            away_league_info["league_id"],
+            away_league_info["season"]
+        )
+
+    home_stats_summary = build_team_stats_summary(home_team["name"], home_stats, home_standing, "home")
+    away_stats_summary = build_team_stats_summary(away_team["name"], away_stats, away_standing, "away")
+
+    h2h_summary = compute_h2h_summary(home_team["name"], away_team["name"], h2h)
+
     home_news = collect_team_news(home_team["name"])
     away_news = collect_team_news(away_team["name"])
     match_news = collect_match_news(home_team["name"], away_team["name"])
 
-    home_news_summary = summarize_articles_for_prompt(home_news)
-    away_news_summary = summarize_articles_for_prompt(away_news)
+    home_news_summary = summarize_news_angles(home_team["name"], home_news)
+    away_news_summary = summarize_news_angles(away_team["name"], away_news)
     match_news_summary = summarize_articles_for_prompt(match_news)
 
     weather_summary = get_weather_context(
         home_team.get("venue_city", ""),
         home_team.get("country", "")
     )
-
-    h2h_summary = compute_h2h_summary(home_team["name"], away_team["name"], h2h)
 
     prompt = build_proheat_prompt(
         home_team["name"],
@@ -1356,6 +1537,10 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
         away_news_summary,
         match_news_summary,
         weather_summary,
+        home_stats_summary,
+        away_stats_summary,
+        home_standing,
+        away_standing
     )
 
     ctx_for_lines = {
@@ -1374,6 +1559,8 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
         "home_news": home_news,
         "away_news": away_news,
         "match_news": match_news,
+        "home_stats_summary": home_stats_summary,
+        "away_stats_summary": away_stats_summary
     }
 
     try:
@@ -1393,20 +1580,22 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
         payload.setdefault("sot", {"linea": "-", "probabilidad": "-"})
         payload.setdefault("corners", {"linea": "-", "probabilidad": "-"})
         payload.setdefault("tarjetas", {"linea": "-", "probabilidad": "-"})
+
         payload["analisis"] = ensure_8_lines_blog(payload.get("analisis", ""), ctx_for_lines)
 
         save_cached_analysis(match_text, payload)
 
-        picks_text = format_sport_ia_picks(home_team["name"], away_team["name"], payload)
-        blog_text = format_sport_ia_blog(payload)
-        return picks_text, blog_text
+        return (
+            format_sport_ia_picks(home_team["name"], away_team["name"], payload),
+            format_sport_ia_blog(payload)
+        )
 
     except Exception as e:
         logger.exception("Error en OpenAI")
         return None, f"❌ Error generando el análisis:\n{str(e)}"
 
 # =========================================================
-# TELEGRAM HANDLERS
+# HANDLERS TELEGRAM
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1549,7 +1738,7 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"Usuario {user_id} aprobado.")
 
 # =========================================================
-# VALIDACIONES DE ARRANQUE
+# VALIDACIONES
 # =========================================================
 
 def validate_environment() -> None:
