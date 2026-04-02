@@ -33,7 +33,16 @@ from telegram.ext import (
 MX_TZ = ZoneInfo("America/Mexico_City")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7696799656"))
+
+# =========================
+# ADMINS
+# =========================
+# Puedes cambiar/agregar admins aquí fácilmente
+ADMIN_IDS = {
+    7696799656,
+    8483530865,
+}
+
 USERS_FILE = os.getenv("USERS_FILE", "usuarios.json")
 EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")
 
@@ -51,6 +60,11 @@ OPEN_METEO_FORECAST_BASE = "https://api.open-meteo.com/v1/forecast"
 
 SPORT_IA_USAGE_FILE = os.getenv("SPORT_IA_USAGE_FILE", "sport_ia_usage.json")
 SPORT_IA_CACHE_FILE = os.getenv("SPORT_IA_CACHE_FILE", "sport_ia_cache.json")
+
+# =========================
+# LÍMITE EDITABLE PROHEAT SPORT IA
+# =========================
+# Cambia este valor cuando quieras modificar los usos diarios
 SPORT_IA_DAILY_LIMIT = int(os.getenv("SPORT_IA_DAILY_LIMIT", "10"))
 
 NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "6"))
@@ -205,6 +219,14 @@ def load_json_file(path: str, default_value: Any) -> Any:
 def save_json_file(path: str, data: Any) -> None:
     atomic_write_json(path, data)
 
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+def format_date_safe(date_str: Optional[str]) -> str:
+    if not date_str:
+        return "N/A"
+    return str(date_str)
+
 # =========================================================
 # JSON / USERS / CACHE
 # =========================================================
@@ -228,7 +250,7 @@ def is_user_active(user_data: Dict[str, Any]) -> bool:
         return False
 
 def is_allowed(user_id: int) -> bool:
-    if user_id == ADMIN_ID:
+    if is_admin(user_id):
         return True
     users = load_users()
     return is_user_active(users.get(str(user_id)))
@@ -281,6 +303,70 @@ def save_cached_analysis(match_text: str, result: Dict[str, Any]) -> None:
         "result": result
     }
     save_cache(cache)
+
+# =========================================================
+# USERS HELPERS
+# =========================================================
+
+def create_or_update_pending_user(user_id: int) -> None:
+    users = load_users()
+    key = str(user_id)
+    if key not in users:
+        users[key] = {
+            "status": "pending",
+            "requested_at": today_mx(),
+            "start_date": None,
+            "expires": None,
+        }
+    else:
+        users[key].setdefault("status", "pending")
+        users[key].setdefault("requested_at", today_mx())
+        users[key].setdefault("start_date", None)
+        users[key].setdefault("expires", None)
+    save_users(users)
+
+def approve_user_membership(user_id: str, days: int = 30) -> Dict[str, Any]:
+    users = load_users()
+    start_date = now_mx().date()
+    expiration = start_date + timedelta(days=days)
+
+    users[user_id] = {
+        "status": "active",
+        "requested_at": users.get(user_id, {}).get("requested_at", today_mx()),
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "expires": expiration.strftime("%Y-%m-%d"),
+    }
+    save_users(users)
+    return users[user_id]
+
+def build_users_report() -> str:
+    users = load_users()
+    if not users:
+        return "No hay usuarios registrados."
+
+    lines = ["👥 USUARIOS PROHEAT SPORTS", ""]
+    sorted_items = sorted(users.items(), key=lambda x: x[0])
+
+    for user_id, data in sorted_items:
+        status = data.get("status", "active" if is_user_active(data) else "inactive")
+        requested_at = format_date_safe(data.get("requested_at"))
+        start_date = format_date_safe(data.get("start_date"))
+        expires = format_date_safe(data.get("expires"))
+
+        if data.get("expires"):
+            active_now = is_user_active(data)
+            estado_txt = "Activo" if active_now else "Vencido"
+        else:
+            estado_txt = status.capitalize()
+
+        lines.append(f"🆔 {user_id}")
+        lines.append(f"Estado: {estado_txt}")
+        lines.append(f"Solicitud: {requested_at}")
+        lines.append(f"Inicio: {start_date}")
+        lines.append(f"Fin: {expires}")
+        lines.append("━━━━━━━━━━━━━━━")
+
+    return "\n".join(lines)
 
 # =========================================================
 # GUIA
@@ -1608,7 +1694,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "💎 PROHEAT SPORTS PREMIUM\n\n"
             "Acceso mensual: $100 MXN\n\n"
-            "Envía comprobante\n\n"
+            "Envía comprobante en imagen\n\n"
             "Usa /myid"
         )
         return
@@ -1625,6 +1711,55 @@ async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(f"🆔 {update.message.from_user.id}")
 
+async def usuarios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    user_id = update.message.from_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Este comando es solo para administradores.")
+        return
+
+    await update.message.reply_text(build_users_report())
+
+async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    user_id = update.message.from_user.id
+
+    if is_allowed(user_id):
+        await update.message.reply_text("✅ Imagen recibida.")
+        return
+
+    create_or_update_pending_user(user_id)
+
+    caption = (
+        "📩 NUEVO COMPROBANTE RECIBIDO\n"
+        f"Usuario ID: {user_id}\n"
+        "Revisa la imagen y valida si el comprobante es real.\n\n"
+        "Para aprobar usa el botón de abajo."
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Aprobar", callback_data=f"approve_{user_id}")]
+    ])
+
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_photo(
+                chat_id=admin_id,
+                photo=update.message.photo[-1].file_id,
+                caption=caption,
+                reply_markup=keyboard
+            )
+        except Exception:
+            logger.exception("No se pudo reenviar comprobante al admin %s", admin_id)
+
+    await update.message.reply_text(
+        "📩 Comprobante recibido. Será revisado por administración."
+    )
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -1634,20 +1769,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = raw_text.lower().strip()
 
     if not is_allowed(user_id):
+        create_or_update_pending_user(user_id)
+
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Aprobar", callback_data=f"approve_{user_id}")]
         ])
 
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"📩 Solicitud de acceso\nID: {user_id}",
-                reply_markup=keyboard
-            )
-        except Exception:
-            logger.exception("No se pudo avisar al admin")
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📩 Solicitud de acceso\nID: {user_id}",
+                    reply_markup=keyboard
+                )
+            except Exception:
+                logger.exception("No se pudo avisar al admin %s", admin_id)
 
-        await update.message.reply_text("📩 Espera aprobación.")
+        await update.message.reply_text(
+            "📩 Espera aprobación.\n\n"
+            "Si ya realizaste el pago, envía el comprobante en imagen."
+        )
         return
 
     if context.user_data.get("sport_ia_mode"):
@@ -1683,7 +1824,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Equipo Local vs Equipo Visitante\n\n"
             "Ejemplo:\n"
             "Real Madrid vs Atletico de Madrid\n\n"
-            f"Consultas disponibles hoy: {restantes}"
+            f"Consultas disponibles hoy: {restantes}\n"
+            f"Límite diario actual: {SPORT_IA_DAILY_LIMIT}"
         )
         context.user_data["sport_ia_mode"] = True
         return
@@ -1715,6 +1857,11 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
 
+    admin_user_id = query.from_user.id
+    if not is_admin(admin_user_id):
+        await query.answer("Solo admin", show_alert=True)
+        return
+
     await query.answer()
 
     try:
@@ -1723,11 +1870,7 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("No pude interpretar el ID del usuario.")
         return
 
-    users = load_users()
-    expiration = now_mx() + timedelta(days=30)
-
-    users[user_id] = {"expires": expiration.strftime("%Y-%m-%d")}
-    save_users(users)
+    user_data = approve_user_membership(user_id, days=30)
 
     try:
         await context.bot.send_message(chat_id=user_id, text="✅ Acceso aprobado")
@@ -1735,7 +1878,11 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("No se pudo notificar al usuario aprobado")
 
-    await query.edit_message_text(f"Usuario {user_id} aprobado.")
+    await query.edit_message_text(
+        f"Usuario {user_id} aprobado.\n"
+        f"Inicio: {user_data.get('start_date')}\n"
+        f"Fin: {user_data.get('expires')}"
+    )
 
 # =========================================================
 # VALIDACIONES
@@ -1757,6 +1904,7 @@ def validate_environment() -> None:
     logger.info("Excel file: %s", EXCEL_FILE)
     logger.info("Modelo OpenAI: %s", OPENAI_MODEL)
     logger.info("Sport IA daily limit: %s", SPORT_IA_DAILY_LIMIT)
+    logger.info("Admins cargados: %s", sorted(list(ADMIN_IDS)))
 
 # =========================================================
 # MAIN
@@ -1769,6 +1917,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("myid", my_id))
+    app.add_handler(CommandHandler("usuarios", usuarios_cmd))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-7]$"))
     app.add_handler(CallbackQueryHandler(approve_user, pattern=r"^approve_\d+$"))
