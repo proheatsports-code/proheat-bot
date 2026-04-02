@@ -37,7 +37,6 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 # =========================
 # ADMINS
 # =========================
-# Puedes cambiar/agregar admins aquí fácilmente
 ADMIN_IDS = {
     7696799656,
     8483530865,
@@ -64,7 +63,6 @@ SPORT_IA_CACHE_FILE = os.getenv("SPORT_IA_CACHE_FILE", "sport_ia_cache.json")
 # =========================
 # LÍMITE EDITABLE PROHEAT SPORT IA
 # =========================
-# Cambia este valor cuando quieras modificar los usos diarios
 SPORT_IA_DAILY_LIMIT = int(os.getenv("SPORT_IA_DAILY_LIMIT", "10"))
 
 NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "6"))
@@ -240,6 +238,8 @@ def save_users(data: Dict[str, Any]) -> None:
 def is_user_active(user_data: Dict[str, Any]) -> bool:
     if not user_data:
         return False
+    if user_data.get("status") == "expired":
+        return False
     expires = user_data.get("expires")
     if not expires:
         return True
@@ -317,12 +317,16 @@ def create_or_update_pending_user(user_id: int) -> None:
             "requested_at": today_mx(),
             "start_date": None,
             "expires": None,
+            "warned_3days_at": None,
+            "expired_notified_at": None,
         }
     else:
         users[key].setdefault("status", "pending")
         users[key].setdefault("requested_at", today_mx())
         users[key].setdefault("start_date", None)
         users[key].setdefault("expires", None)
+        users[key].setdefault("warned_3days_at", None)
+        users[key].setdefault("expired_notified_at", None)
     save_users(users)
 
 def approve_user_membership(user_id: str, days: int = 30) -> Dict[str, Any]:
@@ -335,9 +339,19 @@ def approve_user_membership(user_id: str, days: int = 30) -> Dict[str, Any]:
         "requested_at": users.get(user_id, {}).get("requested_at", today_mx()),
         "start_date": start_date.strftime("%Y-%m-%d"),
         "expires": expiration.strftime("%Y-%m-%d"),
+        "warned_3days_at": None,
+        "expired_notified_at": None,
     }
     save_users(users)
     return users[user_id]
+
+def delete_user_membership(user_id: str) -> bool:
+    users = load_users()
+    if user_id not in users:
+        return False
+    del users[user_id]
+    save_users(users)
+    return True
 
 def build_users_report() -> str:
     users = load_users()
@@ -367,6 +381,96 @@ def build_users_report() -> str:
         lines.append("━━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
+
+# =========================================================
+# RENOVACIONES / EXPIRACIÓN
+# =========================================================
+
+async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
+    users = load_users()
+    if not users:
+        return
+
+    today = now_mx().date()
+    changed = False
+
+    for user_id, data in list(users.items()):
+        expires_str = data.get("expires")
+        if not expires_str:
+            continue
+
+        try:
+            expires_date = datetime.strptime(expires_str, "%Y-%m-%d").date()
+        except Exception:
+            continue
+
+        days_left = (expires_date - today).days
+
+        # Aviso 3 días antes
+        if days_left == 3 and data.get("warned_3days_at") != today_mx():
+            try:
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text=(
+                        "⏳ Tu suscripción de ProHeat Sports vencerá en 3 días.\n"
+                        "Si deseas continuar con el bot, te recomendamos renovar con anticipación."
+                    )
+                )
+            except Exception:
+                logger.exception("No se pudo avisar al usuario %s sobre vencimiento próximo", user_id)
+
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"📣 Aviso de suscripción próxima a vencer\n"
+                            f"Usuario: {user_id}\n"
+                            f"Inicio: {data.get('start_date', 'N/A')}\n"
+                            f"Fin: {data.get('expires', 'N/A')}\n"
+                            "Vence en 3 días."
+                        )
+                    )
+                except Exception:
+                    logger.exception("No se pudo avisar al admin %s sobre vencimiento próximo", admin_id)
+
+            data["warned_3days_at"] = today_mx()
+            changed = True
+
+        # Expiración automática
+        if days_left < 0 and data.get("status") != "expired":
+            data["status"] = "expired"
+            data["expired_notified_at"] = today_mx()
+            changed = True
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text=(
+                        "🔒 Tu suscripción de ProHeat Sports ha vencido.\n"
+                        "Gracias por usar el bot.\n"
+                        "Si deseas continuar, envía tu comprobante para renovar tu acceso."
+                    )
+                )
+            except Exception:
+                logger.exception("No se pudo avisar al usuario %s sobre expiración", user_id)
+
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"🔒 Suscripción vencida automáticamente\n"
+                            f"Usuario: {user_id}\n"
+                            f"Inicio: {data.get('start_date', 'N/A')}\n"
+                            f"Fin: {data.get('expires', 'N/A')}"
+                        )
+                    )
+                except Exception:
+                    logger.exception("No se pudo avisar al admin %s sobre expiración", admin_id)
+
+    if changed:
+        save_users(users)
 
 # =========================================================
 # GUIA
@@ -1277,7 +1381,11 @@ Devuelve SOLO JSON válido con esta estructura exacta:
 {{
   "pick_principal": "texto",
   "doble_oportunidad": {{"pick": "texto", "probabilidad": "texto"}},
-  "goles": {{"local": "texto", "visitante": "texto"}},
+  "marcador_global": {{"linea": "texto", "probabilidad": "texto"}},
+  "goles": {{
+    "local": {{"valor": "texto", "probabilidad": "texto"}},
+    "visitante": {{"valor": "texto", "probabilidad": "texto"}}
+  }},
   "sot": {{"linea": "texto", "probabilidad": "texto"}},
   "corners": {{"linea": "texto", "probabilidad": "texto"}},
   "tarjetas": {{"linea": "texto", "probabilidad": "texto"}},
@@ -1293,6 +1401,8 @@ Reglas obligatorias:
 - Si faltan datos, dilo de forma concreta y sigue con lo que sí se puede inferir.
 - Menciona nombres de los equipos de forma natural.
 - Mantén cada línea breve, clara y específica.
+- En marcador_global usa formato como +1.5 o -3.5.
+- En goles devuelve valor y probabilidad por separado.
 - No agregues texto fuera del JSON.
 """.strip()
 
@@ -1481,9 +1591,39 @@ def ensure_8_lines_blog(text: str, ctx: Dict[str, Any]) -> str:
 # FORMATO RESPUESTA
 # =========================================================
 
+def normalize_goles_payload(goles_payload: Any) -> Dict[str, Dict[str, str]]:
+    default = {
+        "local": {"valor": "-", "probabilidad": "-"},
+        "visitante": {"valor": "-", "probabilidad": "-"}
+    }
+
+    if not isinstance(goles_payload, dict):
+        return default
+
+    local = goles_payload.get("local", {})
+    visitante = goles_payload.get("visitante", {})
+
+    # compatibilidad hacia atrás si venía como string
+    if isinstance(local, str):
+        local = {"valor": local, "probabilidad": "-"}
+    if isinstance(visitante, str):
+        visitante = {"valor": visitante, "probabilidad": "-"}
+
+    return {
+        "local": {
+            "valor": str(local.get("valor", "-")),
+            "probabilidad": str(local.get("probabilidad", "-")),
+        },
+        "visitante": {
+            "valor": str(visitante.get("valor", "-")),
+            "probabilidad": str(visitante.get("probabilidad", "-")),
+        }
+    }
+
 def format_sport_ia_picks(home_name: str, away_name: str, payload: Dict[str, Any]) -> str:
     doble = payload.get("doble_oportunidad", {}) or {}
-    goles = payload.get("goles", {}) or {}
+    marcador_global = payload.get("marcador_global", {}) or {}
+    goles = normalize_goles_payload(payload.get("goles", {}))
     sot = payload.get("sot", {}) or {}
     corners = payload.get("corners", {}) or {}
     tarjetas = payload.get("tarjetas", {}) or {}
@@ -1495,7 +1635,8 @@ def format_sport_ia_picks(home_name: str, away_name: str, payload: Dict[str, Any
         f"🏟️ {home_name} vs {away_name}\n\n"
         f"📊 {payload.get('pick_principal', '-')}\n"
         f"🔒 Doble oportunidad: {doble.get('pick', '-')} ({doble.get('probabilidad', '-')})\n"
-        f"⚽ L: {goles.get('local', '-')} | V: {goles.get('visitante', '-')}\n"
+        f"📈 Marcador Global: {marcador_global.get('linea', '-')} ({marcador_global.get('probabilidad', '-')})\n"
+        f"⚽ Goles: L {goles['local']['valor']} ({goles['local']['probabilidad']}) | V {goles['visitante']['valor']} ({goles['visitante']['probabilidad']})\n"
         f"🎯 SoT: {sot.get('linea', '-')} ({sot.get('probabilidad', '-')})\n"
         f"📐 Corners: {corners.get('linea', '-')} ({corners.get('probabilidad', '-')})\n"
         f"🟨 Tarjetas: {tarjetas.get('linea', '-')} ({tarjetas.get('probabilidad', '-')})"
@@ -1662,7 +1803,8 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
 
         payload.setdefault("pick_principal", "-")
         payload.setdefault("doble_oportunidad", {"pick": "-", "probabilidad": "-"})
-        payload.setdefault("goles", {"local": "-", "visitante": "-"})
+        payload.setdefault("marcador_global", {"linea": "-", "probabilidad": "-"})
+        payload["goles"] = normalize_goles_payload(payload.get("goles", {}))
         payload.setdefault("sot", {"linea": "-", "probabilidad": "-"})
         payload.setdefault("corners", {"linea": "-", "probabilidad": "-"})
         payload.setdefault("tarjetas", {"linea": "-", "probabilidad": "-"})
@@ -1721,6 +1863,39 @@ async def usuarios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(build_users_report())
+
+async def eliminar_usuario_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    user_id = update.message.from_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Este comando es solo para administradores.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Uso: /eliminar_usuario 123456789")
+        return
+
+    target_user_id = context.args[0].strip()
+    ok = delete_user_membership(target_user_id)
+
+    if not ok:
+        await update.message.reply_text("❌ Ese usuario no existe en usuarios.json")
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=int(target_user_id),
+            text=(
+                "🔒 Tu acceso a ProHeat Sports fue removido por administración.\n"
+                "Si deseas volver a usar el bot, envía tu comprobante para reactivar tu membresía."
+            )
+        )
+    except Exception:
+        logger.exception("No se pudo avisar al usuario eliminado %s", target_user_id)
+
+    await update.message.reply_text(f"✅ Usuario {target_user_id} eliminado manualmente.")
 
 async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -1918,10 +2093,15 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("myid", my_id))
     app.add_handler(CommandHandler("usuarios", usuarios_cmd))
+    app.add_handler(CommandHandler("eliminar_usuario", eliminar_usuario_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-7]$"))
     app.add_handler(CallbackQueryHandler(approve_user, pattern=r"^approve_\d+$"))
+
+    # Revisión automática de suscripciones:
+    # cada 12 horas, con primera corrida a los 30 segundos
+    app.job_queue.run_repeating(check_subscriptions, interval=43200, first=30)
 
     logger.info("ProHeat Bot iniciado...")
     app.run_polling(drop_pending_updates=True)
