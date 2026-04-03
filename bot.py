@@ -82,18 +82,22 @@ logger = logging.getLogger("proheat-bot")
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # =========================================================
-# MENU
+# MENÚS
 # =========================================================
 
-menu = [
-    ["📘 Guía de Uso"],
-    ["🤖 ProHeat Sport IA"],
-    ["Partidos del Día"],
-    ["📊 Picks"],
-    ["🔥 PICKS INFERNO 🔥"]
-]
+def build_main_menu_for_user(user_id: int):
+    base_menu = [
+        ["📘 Guía de Uso"],
+        ["🤖 ProHeat Sport IA"],
+        ["Partidos del Día"],
+        ["📊 Picks"],
+        ["🔥 PICKS INFERNO 🔥"]
+    ]
 
-reply_markup = ReplyKeyboardMarkup(menu, resize_keyboard=True)
+    if is_admin(user_id):
+        base_menu.append(["🛠️ Panel de Administradores"])
+
+    return ReplyKeyboardMarkup(base_menu, resize_keyboard=True)
 
 picks_menu = InlineKeyboardMarkup([
     [InlineKeyboardButton("Pronósticos Premium", callback_data="Hoja2")],
@@ -101,6 +105,18 @@ picks_menu = InlineKeyboardMarkup([
     [InlineKeyboardButton("Combinadas Recomendadas", callback_data="Hoja4")],
     [InlineKeyboardButton("Marcadores Probables", callback_data="Hoja5")],
     [InlineKeyboardButton("Picks Top 10", callback_data="Hoja6")]
+])
+
+admin_panel_menu = InlineKeyboardMarkup([
+    [InlineKeyboardButton("👥 Ver usuarios", callback_data="admin_view_users")],
+    [InlineKeyboardButton("📩 Ver pendientes", callback_data="admin_view_pending")],
+    [InlineKeyboardButton("✅ Aprobar usuario", callback_data="admin_prompt_approve")],
+    [InlineKeyboardButton("🗑️ Eliminar usuario", callback_data="admin_prompt_delete")],
+    [InlineKeyboardButton("⏳ Extensión 15 días", callback_data="admin_prompt_extend_15")],
+    [InlineKeyboardButton("⏳ Extensión 30 días", callback_data="admin_prompt_extend_30")],
+    [InlineKeyboardButton("📆 Extensión 60 días", callback_data="admin_prompt_extend_60")],
+    [InlineKeyboardButton("📅 Extensión 90 días", callback_data="admin_prompt_extend_90")],
+    [InlineKeyboardButton("🎁 Prueba Gratuita (7 días)", callback_data="admin_prompt_trial_7")],
 ])
 
 sheet_titles = {
@@ -319,6 +335,7 @@ def create_or_update_pending_user(user_id: int) -> None:
             "expires": None,
             "warned_3days_at": None,
             "expired_notified_at": None,
+            "is_trial": False,
         }
     else:
         users[key].setdefault("status", "pending")
@@ -327,9 +344,10 @@ def create_or_update_pending_user(user_id: int) -> None:
         users[key].setdefault("expires", None)
         users[key].setdefault("warned_3days_at", None)
         users[key].setdefault("expired_notified_at", None)
+        users[key].setdefault("is_trial", False)
     save_users(users)
 
-def approve_user_membership(user_id: str, days: int = 30) -> Dict[str, Any]:
+def approve_user_membership(user_id: str, days: int = 30, is_trial: bool = False) -> Dict[str, Any]:
     users = load_users()
     start_date = now_mx().date()
     expiration = start_date + timedelta(days=days)
@@ -341,6 +359,7 @@ def approve_user_membership(user_id: str, days: int = 30) -> Dict[str, Any]:
         "expires": expiration.strftime("%Y-%m-%d"),
         "warned_3days_at": None,
         "expired_notified_at": None,
+        "is_trial": is_trial,
     }
     save_users(users)
     return users[user_id]
@@ -352,6 +371,50 @@ def delete_user_membership(user_id: str) -> bool:
     del users[user_id]
     save_users(users)
     return True
+
+def extend_user_membership(user_id: str, days: int) -> Optional[Dict[str, Any]]:
+    users = load_users()
+    if user_id not in users:
+        return None
+
+    user_data = users[user_id]
+    today = now_mx().date()
+
+    expires_str = user_data.get("expires")
+    if expires_str:
+        try:
+            current_exp = datetime.strptime(expires_str, "%Y-%m-%d").date()
+        except Exception:
+            current_exp = today
+    else:
+        current_exp = today
+
+    base_date = current_exp if current_exp >= today else today
+    new_exp = base_date + timedelta(days=days)
+
+    if not user_data.get("start_date"):
+        user_data["start_date"] = today.strftime("%Y-%m-%d")
+
+    user_data["status"] = "active"
+    user_data["expires"] = new_exp.strftime("%Y-%m-%d")
+    user_data["warned_3days_at"] = None
+    user_data["expired_notified_at"] = None
+    users[user_id] = user_data
+    save_users(users)
+    return user_data
+
+def get_pending_users_report() -> str:
+    users = load_users()
+    pending = []
+
+    for user_id, data in users.items():
+        if data.get("status") == "pending":
+            pending.append(f"🆔 {user_id} | Solicitud: {data.get('requested_at', 'N/A')}")
+
+    if not pending:
+        return "No hay usuarios pendientes."
+
+    return "📩 USUARIOS PENDIENTES\n\n" + "\n".join(pending)
 
 def build_users_report() -> str:
     users = load_users()
@@ -366,6 +429,7 @@ def build_users_report() -> str:
         requested_at = format_date_safe(data.get("requested_at"))
         start_date = format_date_safe(data.get("start_date"))
         expires = format_date_safe(data.get("expires"))
+        trial_txt = "Sí" if data.get("is_trial") else "No"
 
         if data.get("expires"):
             active_now = is_user_active(data)
@@ -378,6 +442,7 @@ def build_users_report() -> str:
         lines.append(f"Solicitud: {requested_at}")
         lines.append(f"Inicio: {start_date}")
         lines.append(f"Fin: {expires}")
+        lines.append(f"Prueba gratuita: {trial_txt}")
         lines.append("━━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
@@ -406,7 +471,6 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
 
         days_left = (expires_date - today).days
 
-        # Aviso 3 días antes
         if days_left == 3 and data.get("warned_3days_at") != today_mx():
             try:
                 await context.bot.send_message(
@@ -437,7 +501,6 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             data["warned_3days_at"] = today_mx()
             changed = True
 
-        # Expiración automática
         if days_left < 0 and data.get("status") != "expired":
             data["status"] = "expired"
             data["expired_notified_at"] = today_mx()
@@ -473,7 +536,7 @@ async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
         save_users(users)
 
 # =========================================================
-# GUIA
+# GUÍA
 # =========================================================
 
 def guia_texto() -> str:
@@ -1420,7 +1483,7 @@ def parse_json_response(text: str) -> Dict[str, Any]:
         raise ValueError("No se pudo parsear JSON válido.")
 
 # =========================================================
-# 8 LINEAS NO GENERICAS
+# 8 LÍNEAS NO GENÉRICAS
 # =========================================================
 
 def line_quality_ok(line: str) -> bool:
@@ -1603,7 +1666,6 @@ def normalize_goles_payload(goles_payload: Any) -> Dict[str, Dict[str, str]]:
     local = goles_payload.get("local", {})
     visitante = goles_payload.get("visitante", {})
 
-    # compatibilidad hacia atrás si venía como string
     if isinstance(local, str):
         local = {"valor": local, "probabilidad": "-"}
     if isinstance(visitante, str):
@@ -1842,10 +1904,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data["sport_ia_mode"] = False
+    context.user_data["admin_action"] = None
 
     await update.message.reply_text(
         "📊 PROHEAT SPORTS\nSelecciona una opción:",
-        reply_markup=reply_markup
+        reply_markup=build_main_menu_for_user(user_id)
     )
 
 async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1931,9 +1994,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             logger.exception("No se pudo reenviar comprobante al admin %s", admin_id)
 
-    await update.message.reply_text(
-        "📩 Comprobante recibido. Será revisado por administración."
-    )
+    await update.message.reply_text("📩 Comprobante recibido. Será revisado por administración.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -1966,6 +2027,129 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # =========================
+    # PANEL ADMIN - FLUJOS
+    # =========================
+    if is_admin(user_id):
+        admin_action = context.user_data.get("admin_action")
+
+        if admin_action == "approve_user_input":
+            target_user_id = raw_text.strip()
+            if not target_user_id.isdigit():
+                await update.message.reply_text("❌ Escribe un ID numérico válido.")
+                return
+
+            user_data = approve_user_membership(target_user_id, days=30)
+            context.user_data["admin_action"] = None
+
+            try:
+                await context.bot.send_message(chat_id=int(target_user_id), text="✅ Acceso aprobado")
+                await context.bot.send_message(
+                    chat_id=int(target_user_id),
+                    text="Selecciona opción:",
+                    reply_markup=build_main_menu_for_user(int(target_user_id))
+                )
+            except Exception:
+                logger.exception("No se pudo notificar al usuario aprobado manualmente")
+
+            await update.message.reply_text(
+                f"✅ Usuario {target_user_id} aprobado.\n"
+                f"Inicio: {user_data.get('start_date')}\n"
+                f"Fin: {user_data.get('expires')}"
+            )
+            return
+
+        if admin_action == "delete_user_input":
+            target_user_id = raw_text.strip()
+            if not target_user_id.isdigit():
+                await update.message.reply_text("❌ Escribe un ID numérico válido.")
+                return
+
+            ok = delete_user_membership(target_user_id)
+            context.user_data["admin_action"] = None
+
+            if not ok:
+                await update.message.reply_text("❌ Ese usuario no existe en usuarios.json")
+                return
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(target_user_id),
+                    text=(
+                        "🔒 Tu acceso a ProHeat Sports fue removido por administración.\n"
+                        "Si deseas volver a usar el bot, envía tu comprobante para reactivar tu membresía."
+                    )
+                )
+            except Exception:
+                logger.exception("No se pudo avisar al usuario eliminado %s", target_user_id)
+
+            await update.message.reply_text(f"✅ Usuario {target_user_id} eliminado manualmente.")
+            return
+
+        if admin_action in {"extend_user_15", "extend_user_30", "extend_user_60", "extend_user_90", "trial_user_7"}:
+            target_user_id = raw_text.strip()
+            if not target_user_id.isdigit():
+                await update.message.reply_text("❌ Escribe un ID numérico válido.")
+                return
+
+            if admin_action == "trial_user_7":
+                user_data = approve_user_membership(target_user_id, days=7, is_trial=True)
+                context.user_data["admin_action"] = None
+
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(target_user_id),
+                        text=(
+                            "🎁 Se activó tu prueba gratuita de ProHeat Sports por 7 días.\n"
+                            f"Fin: {user_data.get('expires')}"
+                        )
+                    )
+                    await context.bot.send_message(
+                        chat_id=int(target_user_id),
+                        text="Selecciona opción:",
+                        reply_markup=build_main_menu_for_user(int(target_user_id))
+                    )
+                except Exception:
+                    logger.exception("No se pudo avisar al usuario de prueba %s", target_user_id)
+
+                await update.message.reply_text(
+                    f"🎁 Prueba gratuita activada para {target_user_id}.\n"
+                    f"Inicio: {user_data.get('start_date')}\n"
+                    f"Fin: {user_data.get('expires')}"
+                )
+                return
+
+            days_map = {
+                "extend_user_15": 15,
+                "extend_user_30": 30,
+                "extend_user_60": 60,
+                "extend_user_90": 90,
+            }
+            days = days_map[admin_action]
+            user_data = extend_user_membership(target_user_id, days)
+            context.user_data["admin_action"] = None
+
+            if not user_data:
+                await update.message.reply_text("❌ Ese usuario no existe en usuarios.json")
+                return
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(target_user_id),
+                    text=(
+                        f"✅ Tu suscripción de ProHeat Sports fue extendida {days} días.\n"
+                        f"Nuevo vencimiento: {user_data.get('expires')}"
+                    )
+                )
+            except Exception:
+                logger.exception("No se pudo avisar al usuario extendido %s", target_user_id)
+
+            await update.message.reply_text(
+                f"✅ Usuario {target_user_id} extendido {days} días.\n"
+                f"Nuevo fin: {user_data.get('expires')}"
+            )
+            return
+
     if context.user_data.get("sport_ia_mode"):
         context.user_data["sport_ia_mode"] = False
 
@@ -1985,6 +2169,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             restantes = remaining_queries_today(user_id)
             await update.message.reply_text(f"{blog_text}\n\nConsultas restantes hoy: {restantes}")
+        return
+
+    if is_admin(user_id) and "panel de administradores" in msg:
+        await update.message.reply_text("🛠️ PANEL DE ADMINISTRADORES", reply_markup=admin_panel_menu)
         return
 
     if "guía" in msg or "guia" in msg:
@@ -2014,10 +2202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if "picks" in msg:
-        await update.message.reply_text(
-            "📊 Selecciona tipo de picks:",
-            reply_markup=picks_menu
-        )
+        await update.message.reply_text("📊 Selecciona tipo de picks:", reply_markup=picks_menu)
         return
 
 async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2026,6 +2211,65 @@ async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await query.answer()
     await query.message.reply_text(read_sheet(query.data))
+
+async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("Solo admin", show_alert=True)
+        return
+
+    await query.answer()
+    data = query.data
+
+    if data == "admin_view_users":
+        await query.message.reply_text(build_users_report())
+        return
+
+    if data == "admin_view_pending":
+        await query.message.reply_text(get_pending_users_report())
+        return
+
+    if data == "admin_prompt_approve":
+        await query.message.reply_text(
+            "✅ Escribe el ID del usuario que deseas aprobar por 30 días.\n\n"
+            f"{get_pending_users_report()}"
+        )
+        context.user_data["admin_action"] = "approve_user_input"
+        return
+
+    if data == "admin_prompt_delete":
+        await query.message.reply_text("🗑️ Escribe el ID del usuario que deseas eliminar manualmente.")
+        context.user_data["admin_action"] = "delete_user_input"
+        return
+
+    if data == "admin_prompt_extend_15":
+        await query.message.reply_text("⏳ Escribe el ID del usuario al que deseas extender 15 días.")
+        context.user_data["admin_action"] = "extend_user_15"
+        return
+
+    if data == "admin_prompt_extend_30":
+        await query.message.reply_text("⏳ Escribe el ID del usuario al que deseas extender 30 días.")
+        context.user_data["admin_action"] = "extend_user_30"
+        return
+
+    if data == "admin_prompt_extend_60":
+        await query.message.reply_text("📆 Escribe el ID del usuario al que deseas extender 60 días.")
+        context.user_data["admin_action"] = "extend_user_60"
+        return
+
+    if data == "admin_prompt_extend_90":
+        await query.message.reply_text("📅 Escribe el ID del usuario al que deseas extender 90 días.")
+        context.user_data["admin_action"] = "extend_user_90"
+        return
+
+    if data == "admin_prompt_trial_7":
+        await query.message.reply_text("🎁 Escribe el ID del usuario al que deseas activar prueba gratuita de 7 días.")
+        context.user_data["admin_action"] = "trial_user_7"
+        return
 
 async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2049,7 +2293,11 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_message(chat_id=user_id, text="✅ Acceso aprobado")
-        await context.bot.send_message(chat_id=user_id, text="Selecciona opción:", reply_markup=reply_markup)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="Selecciona opción:",
+            reply_markup=build_main_menu_for_user(int(user_id))
+        )
     except Exception:
         logger.exception("No se pudo notificar al usuario aprobado")
 
@@ -2097,11 +2345,15 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-7]$"))
+    app.add_handler(CallbackQueryHandler(handle_admin_panel, pattern=r"^admin_"))
     app.add_handler(CallbackQueryHandler(approve_user, pattern=r"^approve_\d+$"))
 
-    # Revisión automática de suscripciones:
-    # cada 12 horas, con primera corrida a los 30 segundos
-    app.job_queue.run_repeating(check_subscriptions, interval=43200, first=30)
+    # Solo programa trabajos si JobQueue está disponible
+    if app.job_queue:
+        app.job_queue.run_repeating(check_subscriptions, interval=43200, first=30)
+        logger.info("JobQueue activado correctamente.")
+    else:
+        logger.warning("JobQueue no disponible. Instala python-telegram-bot[job-queue] para activar recordatorios automáticos.")
 
     logger.info("ProHeat Bot iniciado...")
     app.run_polling(drop_pending_updates=True)
