@@ -95,8 +95,7 @@ def build_main_menu_for_user(user_id: int):
         ["📘 Guía de Uso"],
         ["🤖 ProHeat Sport IA"],
         ["Partidos del Día"],
-        ["📊 Picks"],
-        ["🔥 PICKS INFERNO 🔥"]
+        ["🔥 Hot Predicciones"]
     ]
 
     if is_admin(user_id):
@@ -104,13 +103,19 @@ def build_main_menu_for_user(user_id: int):
 
     return ReplyKeyboardMarkup(base_menu, resize_keyboard=True)
 
-picks_menu = InlineKeyboardMarkup([
-    [InlineKeyboardButton("Pronósticos Premium", callback_data="Hoja2")],
+hot_predicciones_menu = InlineKeyboardMarkup([
+    [InlineKeyboardButton("Predicciones Premium", callback_data="Hoja2")],
     [InlineKeyboardButton("Manejo de Banca", callback_data="Hoja3")],
-    [InlineKeyboardButton("Combinadas Recomendadas", callback_data="Hoja4")],
+    [InlineKeyboardButton("Combinadas IA", callback_data="Hoja4")],
     [InlineKeyboardButton("Marcadores Probables", callback_data="Hoja5")],
-    [InlineKeyboardButton("Picks Top 10", callback_data="Hoja6")]
+    [InlineKeyboardButton("Predicciones Heatop", callback_data="Hoja6")],
+    [InlineKeyboardButton("Equipos más confiables hoy", callback_data="Hoja7")],
+    [InlineKeyboardButton("Predicciones Simples", callback_data="Hoja8")],
+    [InlineKeyboardButton("Combinadas Inferno", callback_data="Hoja9")],
 ])
+
+# Alias para compatibilidad interna con llamadas antiguas.
+picks_menu = hot_predicciones_menu
 
 admin_panel_menu = InlineKeyboardMarkup([
     [InlineKeyboardButton("👥 Ver usuarios", callback_data="admin_view_users")],
@@ -126,24 +131,37 @@ admin_panel_menu = InlineKeyboardMarkup([
 
 sheet_titles = {
     "Hoja1": "🔥 PARTIDOS DEL DÍA 🔥",
-    "Hoja2": "🔥 PRONÓSTICOS PREMIUM 🔥",
+    "Hoja2": "🔥 PREDICCIONES PREMIUM 🔥",
     "Hoja3": "🔥 MANEJO DE BANCA 🔥",
-    "Hoja4": "🔥 COMBINADAS RECOMENDADAS 🔥",
-    "Hoja5": "🔥 MARCADORES MÁS PROBABLES 🔥",
-    "Hoja6": "🔥 PICKS TOP 10 🔥",
-    "Hoja7": "🔥 PICKS INFERNO 🔥",
+    "Hoja4": "🔥 COMBINADAS IA 🔥",
+    "Hoja5": "🔥 MARCADORES PROBABLES 🔥",
+    "Hoja6": "🔥 PREDICCIONES HEATOP 🔥",
+    "Hoja7": "🔥 EQUIPOS MÁS CONFIABLES HOY 🔥",
+    "Hoja8": "🔥 PREDICCIONES SIMPLES 🔥",
+    "Hoja9": "🔥 COMBINADAS INFERNO 🔥",
 }
 
 # El admin web genera latest.json y expone estas secciones por API.
 # Así el bot y la web premium consumen la misma fuente después de subir Excel.
 SHEET_TO_API = {
-    "Hoja1": "/api/data/public",
-    "Hoja2": "/api/data/general",
+    # Hoja1 = Partidos del día
+    "Hoja1": "/api/data/general",
+    # Hoja2 = Predicciones Premium
+    "Hoja2": "/api/data/ultra",
+    # Hoja3 = Manejo de banca
     "Hoja3": "/api/data/stakes",
+    # Hoja4 = Combinadas IA
     "Hoja4": "/api/data/combinadas",
+    # Hoja5 = Marcadores probables
     "Hoja5": "/api/data/goles",
+    # Hoja6 = Predicciones Heatop
     "Hoja6": "/api/data/top",
-    "Hoja7": "/api/data/inferno",
+    # Hoja7 = Equipos más confiables hoy
+    "Hoja7": "/api/data/alta-confianza",
+    # Hoja8 = Predicciones Simples
+    "Hoja8": "/api/data/public",
+    # Hoja9 = Combinadas Inferno
+    "Hoja9": "/api/data/inferno",
 }
 
 # =========================================================
@@ -570,15 +588,15 @@ def guia_texto() -> str:
         "📌 *SECCIONES*\n\n"
         "🔥 *Partidos del Día*\n"
         "Análisis completo generado por IA: ganador probable, goles, corners y tarjetas.\n\n"
-        "💎 *Pronósticos Premium*\n"
+        "💎 *Predicciones Premium*\n"
         "Selección de picks con mayor probabilidad estadística.\n\n"
         "📊 *Manejo de Banca*\n"
         "Porcentaje recomendado a invertir por pick.\n\n"
-        "🔗 *Combinadas Recomendadas*\n"
+        "🔗 *Combinadas IA*\n"
         "Picks agrupados optimizados por IA.\n\n"
-        "⚽ *Marcadores más Probables*\n"
+        "⚽ *Marcadores Probables*\n"
         "Proyección de goles por partido.\n\n"
-        "🏆 *Picks Top 10*\n"
+        "🏆 *Predicciones Heatop*\n"
         "Los picks con mayor valor estadístico del día.\n\n"
         "🔥🟠 *Picks Inferno*\n"
         "Selección premium basada en análisis completo del día.\n\n"
@@ -2364,15 +2382,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if "inferno" in msg:
-        await update.message.reply_text(read_sheet("Hoja7"))
+        await update.message.reply_text(read_sheet("Hoja9"))
         return
 
     if "partidos" in msg:
         await update.message.reply_text(read_sheet("Hoja1"))
         return
 
-    if "picks" in msg:
-        await update.message.reply_text("📊 Selecciona tipo de picks:", reply_markup=picks_menu)
+    if "hot predicciones" in msg or "picks" in msg or "predicciones" in msg:
+        await update.message.reply_text("🔥 Selecciona una sección de Hot Predicciones:", reply_markup=hot_predicciones_menu)
         return
 
 async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2515,7 +2533,7 @@ def main():
     app.add_handler(CommandHandler("eliminar_usuario", eliminar_usuario_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-7]$"))
+    app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-9]$"))
     app.add_handler(CallbackQueryHandler(handle_admin_panel, pattern=r"^admin_"))
     app.add_handler(CallbackQueryHandler(approve_user, pattern=r"^approve_\d+$"))
 
