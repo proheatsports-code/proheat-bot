@@ -43,12 +43,7 @@ ADMIN_IDS = {
 }
 
 USERS_FILE = os.getenv("USERS_FILE", "usuarios.json")
-EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")  # Fallback local si la API no responde
-
-# URL pública del backend/web ProHeat Sports.
-# En Railway agrega esta variable si tu dominio cambia:
-# PROHEAT_API_BASE=https://proheatsports.com
-PROHEAT_API_BASE = os.getenv("PROHEAT_API_BASE", "https://proheatsports.com").strip().rstrip("/")
+EXCEL_FILE = os.getenv("EXCEL_FILE", "data.xlsx")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
@@ -95,7 +90,8 @@ def build_main_menu_for_user(user_id: int):
         ["📘 Guía de Uso"],
         ["🤖 ProHeat Sport IA"],
         ["Partidos del Día"],
-        ["🔥 Hot Predicciones"]
+        ["📊 Picks"],
+        ["🔥 PICKS INFERNO 🔥"]
     ]
 
     if is_admin(user_id):
@@ -103,19 +99,13 @@ def build_main_menu_for_user(user_id: int):
 
     return ReplyKeyboardMarkup(base_menu, resize_keyboard=True)
 
-hot_predicciones_menu = InlineKeyboardMarkup([
-    [InlineKeyboardButton("Predicciones Premium", callback_data="Hoja2")],
+picks_menu = InlineKeyboardMarkup([
+    [InlineKeyboardButton("Pronósticos Premium", callback_data="Hoja2")],
     [InlineKeyboardButton("Manejo de Banca", callback_data="Hoja3")],
-    [InlineKeyboardButton("Combinadas IA", callback_data="Hoja4")],
+    [InlineKeyboardButton("Combinadas Recomendadas", callback_data="Hoja4")],
     [InlineKeyboardButton("Marcadores Probables", callback_data="Hoja5")],
-    [InlineKeyboardButton("Predicciones Heatop", callback_data="Hoja6")],
-    [InlineKeyboardButton("Equipos más confiables hoy", callback_data="Hoja7")],
-    [InlineKeyboardButton("Predicciones Simples", callback_data="Hoja8")],
-    [InlineKeyboardButton("Combinadas Inferno", callback_data="Hoja9")],
+    [InlineKeyboardButton("Picks Top 10", callback_data="Hoja6")]
 ])
-
-# Alias para compatibilidad interna con llamadas antiguas.
-picks_menu = hot_predicciones_menu
 
 admin_panel_menu = InlineKeyboardMarkup([
     [InlineKeyboardButton("👥 Ver usuarios", callback_data="admin_view_users")],
@@ -131,37 +121,12 @@ admin_panel_menu = InlineKeyboardMarkup([
 
 sheet_titles = {
     "Hoja1": "🔥 PARTIDOS DEL DÍA 🔥",
-    "Hoja2": "🔥 PREDICCIONES PREMIUM 🔥",
+    "Hoja2": "🔥 PRONÓSTICOS PREMIUM 🔥",
     "Hoja3": "🔥 MANEJO DE BANCA 🔥",
-    "Hoja4": "🔥 COMBINADAS IA 🔥",
-    "Hoja5": "🔥 MARCADORES PROBABLES 🔥",
-    "Hoja6": "🔥 PREDICCIONES HEATOP 🔥",
-    "Hoja7": "🔥 EQUIPOS MÁS CONFIABLES HOY 🔥",
-    "Hoja8": "🔥 PREDICCIONES SIMPLES 🔥",
-    "Hoja9": "🔥 COMBINADAS INFERNO 🔥",
-}
-
-# El admin web genera latest.json y expone estas secciones por API.
-# Así el bot y la web premium consumen la misma fuente después de subir Excel.
-SHEET_TO_API = {
-    # Hoja1 = Partidos del día
-    "Hoja1": "/api/data/general",
-    # Hoja2 = Predicciones Premium
-    "Hoja2": "/api/data/ultra",
-    # Hoja3 = Manejo de banca
-    "Hoja3": "/api/data/stakes",
-    # Hoja4 = Combinadas IA
-    "Hoja4": "/api/data/combinadas",
-    # Hoja5 = Marcadores probables
-    "Hoja5": "/api/data/goles",
-    # Hoja6 = Predicciones Heatop
-    "Hoja6": "/api/data/top",
-    # Hoja7 = Equipos más confiables hoy
-    "Hoja7": "/api/data/alta-confianza",
-    # Hoja8 = Predicciones Simples
-    "Hoja8": "/api/data/public",
-    # Hoja9 = Combinadas Inferno
-    "Hoja9": "/api/data/inferno",
+    "Hoja4": "🔥 COMBINADAS RECOMENDADAS 🔥",
+    "Hoja5": "🔥 MARCADORES MÁS PROBABLES 🔥",
+    "Hoja6": "🔥 PICKS TOP 10 🔥",
+    "Hoja7": "🔥 PICKS INFERNO 🔥",
 }
 
 # =========================================================
@@ -588,15 +553,15 @@ def guia_texto() -> str:
         "📌 *SECCIONES*\n\n"
         "🔥 *Partidos del Día*\n"
         "Análisis completo generado por IA: ganador probable, goles, corners y tarjetas.\n\n"
-        "💎 *Predicciones Premium*\n"
+        "💎 *Pronósticos Premium*\n"
         "Selección de picks con mayor probabilidad estadística.\n\n"
         "📊 *Manejo de Banca*\n"
         "Porcentaje recomendado a invertir por pick.\n\n"
-        "🔗 *Combinadas IA*\n"
+        "🔗 *Combinadas Recomendadas*\n"
         "Picks agrupados optimizados por IA.\n\n"
-        "⚽ *Marcadores Probables*\n"
+        "⚽ *Marcadores más Probables*\n"
         "Proyección de goles por partido.\n\n"
-        "🏆 *Predicciones Heatop*\n"
+        "🏆 *Picks Top 10*\n"
         "Los picks con mayor valor estadístico del día.\n\n"
         "🔥🟠 *Picks Inferno*\n"
         "Selección premium basada en análisis completo del día.\n\n"
@@ -609,163 +574,17 @@ def guia_texto() -> str:
     )
 
 # =========================================================
-# DATOS WEB / EXCEL FALLBACK
+# EXCEL
 # =========================================================
 
-DISPLAY_LABELS = {
-    "hora": "⏰ Hora",
-    "time": "⏰ Hora",
-    "liga": "⚽ Liga",
-    "league": "⚽ Liga",
-    "partido": "🏟️ Partido",
-    "match": "🏟️ Partido",
-    "sem": "🚦 Semáforo",
-    "semaforo": "🚦 Semáforo",
-    "ml": "📊 ML/DC",
-    "dc": "📊 DC",
-    "pick": "📌 Pick",
-    "bet_recomendado": "✅ Bet recomendado",
-    "goles_local": "⚽ Goles Local",
-    "goles_visitante": "⚽ Goles Visitante",
-    "marcador_global": "📈 Marcador Global",
-    "mitades": "⏱️ Mitades",
-    "sot": "🎯 SoT",
-    "corners": "📐 Corners",
-    "tarjetas": "🟨 Tarjetas",
-    "stake": "💰 Stake",
-    "probabilidad": "📊 Probabilidad",
-    "nota": "🧠 Nota",
-    "notas": "🧠 Notas",
-}
-
-PRIMARY_ORDER = [
-    "hora", "time", "liga", "league", "sem", "semaforo", "partido", "match",
-    "ml", "dc", "pick", "bet_recomendado", "goles_local", "goles_visitante",
-    "marcador_global", "mitades", "sot", "corners", "tarjetas", "stake",
-    "probabilidad", "nota", "notas",
-]
-
-EMPTY_VALUES = {"", "nan", "none", "null", "n/a", "na", "-"}
-
-def is_empty_value(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, float) and pd.isna(value):
-        return True
-    text = str(value).strip()
-    return text.lower() in EMPTY_VALUES
-
 def format_cell_value(value: Any) -> str:
-    if is_empty_value(value):
+    if pd.isna(value):
         return ""
     if isinstance(value, pd.Timestamp):
         return value.strftime("%H:%M")
     return str(value).strip()
 
-def humanize_key(key: str) -> str:
-    clean = str(key or "").strip()
-    normalized = limpiar_texto(clean).replace(" ", "_")
-    if normalized in DISPLAY_LABELS:
-        return DISPLAY_LABELS[normalized]
-    return clean.replace("_", " ").strip().title()
-
-def normalize_item_key(key: str) -> str:
-    return limpiar_texto(str(key or "")).replace(" ", "_")
-
-def fetch_api_items(sheet_name: str) -> Optional[List[Dict[str, Any]]]:
-    endpoint = SHEET_TO_API.get(sheet_name)
-    if not endpoint:
-        return None
-
-    url = f"{PROHEAT_API_BASE}{endpoint}"
-    try:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        items = data.get("items", [])
-        if not isinstance(items, list):
-            return []
-        return [item for item in items if isinstance(item, dict)]
-    except Exception as e:
-        logger.warning("No se pudo leer API ProHeat %s: %s", url, e)
-        return None
-
-def get_value_by_normalized_key(item: Dict[str, Any], wanted_key: str) -> Any:
-    for key, value in item.items():
-        if normalize_item_key(key) == wanted_key:
-            return value
-    return None
-
-def item_has_key(item: Dict[str, Any], wanted_key: str) -> bool:
-    for key in item.keys():
-        if normalize_item_key(key) == wanted_key:
-            return True
-    return False
-
-def append_line(lines: List[str], label_key: str, value: Any) -> None:
-    if is_empty_value(value):
-        return
-    label = humanize_key(label_key)
-    lines.append(f"{label}: {format_cell_value(value)}")
-
-def format_api_item(item: Dict[str, Any], sheet_name: str) -> str:
-    normalized_keys = {normalize_item_key(k): k for k in item.keys()}
-
-    hora = get_value_by_normalized_key(item, "hora") or get_value_by_normalized_key(item, "time")
-    liga = get_value_by_normalized_key(item, "liga") or get_value_by_normalized_key(item, "league")
-    partido = get_value_by_normalized_key(item, "partido") or get_value_by_normalized_key(item, "match")
-
-    lines: List[str] = []
-
-    if not is_empty_value(liga):
-        lines.append(f"⚽ {format_cell_value(liga)}")
-    if not is_empty_value(hora):
-        lines.append(f"⏰ {format_cell_value(hora)}")
-    if not is_empty_value(partido):
-        lines.append(f"🏟️ {format_cell_value(partido)}")
-
-    for key in PRIMARY_ORDER:
-        if key in {"hora", "time", "liga", "league", "partido", "match"}:
-            continue
-        if item_has_key(item, key):
-            append_line(lines, key, get_value_by_normalized_key(item, key))
-
-    already_used = set(PRIMARY_ORDER)
-    for original_key, value in item.items():
-        nkey = normalize_item_key(original_key)
-        if nkey in already_used:
-            continue
-        if nkey in {"id", "created_at", "updated_at", "source", "source_file"}:
-            continue
-        append_line(lines, original_key, value)
-
-    if not lines:
-        raw_values = [format_cell_value(v) for v in item.values() if not is_empty_value(v)]
-        if raw_values:
-            lines.append(" | ".join(raw_values))
-
-    return "\n".join(lines).strip()
-
-def read_sheet_from_api(sheet_name: str) -> Optional[str]:
-    items = fetch_api_items(sheet_name)
-    if items is None:
-        return None
-
-    title = sheet_titles.get(sheet_name, sheet_name)
-    if not items:
-        return f"{title}\n\n⚠️ Sin datos cargados desde la web."
-
-    parts = [title, ""]
-    for item in items:
-        block = format_api_item(item, sheet_name)
-        if block:
-            parts.append(block)
-            parts.append("━━━━━━━━━━━━━━━")
-            parts.append("")
-
-    return "\n".join(parts).strip()
-
-def read_sheet_from_excel_fallback(sheet_name: str) -> str:
+def read_sheet(sheet_name: str) -> str:
     try:
         df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
         if df.empty:
@@ -815,15 +634,8 @@ def read_sheet_from_excel_fallback(sheet_name: str) -> str:
         return "\n".join(parts).strip()
 
     except Exception as e:
-        logger.exception("Error leyendo Excel fallback")
-        return f"❌ Error leyendo API y Excel fallback:\n{str(e)}"
-
-def read_sheet(sheet_name: str) -> str:
-    # Primero consume la API del backend/web. Si falla, usa el Excel local como respaldo.
-    api_text = read_sheet_from_api(sheet_name)
-    if api_text is not None:
-        return api_text
-    return read_sheet_from_excel_fallback(sheet_name)
+        logger.exception("Error leyendo Excel")
+        return f"❌ Error:\n{str(e)}"
 
 # =========================================================
 # PARSEO PARTIDO / EQUIPOS
@@ -2072,6 +1884,52 @@ def run_sport_ia_analysis(match_text: str) -> Tuple[Optional[str], str]:
         logger.exception("Error en OpenAI")
         return None, f"❌ Error generando el análisis:\n{str(e)}"
 
+
+async def send_long_message(message, text: str, chunk_size: int = 3500):
+    text = str(text or "").strip()
+    if not text:
+        await message.reply_text("⚠️ Sin datos")
+        return
+
+    if len(text) <= chunk_size:
+        await message.reply_text(text)
+        return
+
+    parts = []
+    current = ""
+
+    # Divide preferentemente por separadores de partidos/secciones para no cortar bloques a la mitad.
+    separator = "━━━━━━━━━━━━━━━"
+    blocks = text.split(separator)
+
+    for index, block in enumerate(blocks):
+        block = block.strip()
+        if not block:
+            continue
+
+        piece = block if index == 0 else f"{separator}\n{block}"
+        candidate = f"{current}\n{piece}".strip() if current else piece
+
+        if len(candidate) > chunk_size:
+            if current:
+                parts.append(current.strip())
+                current = piece
+            else:
+                # Si un solo bloque excede el límite, se corta en segmentos seguros.
+                for i in range(0, len(piece), chunk_size):
+                    parts.append(piece[i:i + chunk_size].strip())
+                current = ""
+        else:
+            current = candidate
+
+    if current:
+        parts.append(current.strip())
+
+    total = len(parts)
+    for idx, part in enumerate(parts, start=1):
+        prefix = f"Parte {idx}/{total}\n\n" if total > 1 else ""
+        await message.reply_text(prefix + part)
+
 # =========================================================
 # HANDLERS TELEGRAM
 # =========================================================
@@ -2382,15 +2240,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if "inferno" in msg:
-        await update.message.reply_text(read_sheet("Hoja9"))
+        await update.message.reply_text(read_sheet("Hoja7"))
         return
 
     if "partidos" in msg:
-        await update.message.reply_text(read_sheet("Hoja1"))
+        await send_long_message(update.message, read_sheet("Hoja1"))
         return
 
-    if "hot predicciones" in msg or "picks" in msg or "predicciones" in msg:
-        await update.message.reply_text("🔥 Selecciona una sección de Hot Predicciones:", reply_markup=hot_predicciones_menu)
+    if "picks" in msg:
+        await update.message.reply_text("📊 Selecciona tipo de picks:", reply_markup=picks_menu)
         return
 
 async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2398,7 +2256,7 @@ async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
     await query.answer()
-    await query.message.reply_text(read_sheet(query.data))
+    await send_long_message(query.message, read_sheet(query.data))
 
 async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2512,8 +2370,7 @@ def validate_environment() -> None:
         raise RuntimeError(f"Faltan variables de entorno obligatorias: {', '.join(missing)}")
 
     logger.info("Entorno validado correctamente.")
-    logger.info("Excel fallback file: %s", EXCEL_FILE)
-    logger.info("ProHeat API base: %s", PROHEAT_API_BASE)
+    logger.info("Excel file: %s", EXCEL_FILE)
     logger.info("Modelo OpenAI: %s", OPENAI_MODEL)
     logger.info("Sport IA daily limit: %s", SPORT_IA_DAILY_LIMIT)
     logger.info("Admins cargados: %s", sorted(list(ADMIN_IDS)))
@@ -2533,7 +2390,7 @@ def main():
     app.add_handler(CommandHandler("eliminar_usuario", eliminar_usuario_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-9]$"))
+    app.add_handler(CallbackQueryHandler(handle_picks, pattern="^Hoja[1-7]$"))
     app.add_handler(CallbackQueryHandler(handle_admin_panel, pattern=r"^admin_"))
     app.add_handler(CallbackQueryHandler(approve_user, pattern=r"^approve_\d+$"))
 
