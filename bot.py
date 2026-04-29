@@ -2184,6 +2184,53 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.message.reply_text("📩 Comprobante recibido. Será revisado por administración.")
 
+
+async def send_long_message(message, text: str, chunk_size: int = 3500):
+    """
+    Envía respuestas largas en varios mensajes para evitar el límite de Telegram.
+    Divide preferentemente por separadores de bloque ProHeat.
+    """
+    text = str(text or "").strip()
+
+    if not text:
+        await message.reply_text("⚠️ Sin datos para mostrar.")
+        return
+
+    if len(text) <= chunk_size:
+        await message.reply_text(text)
+        return
+
+    parts = []
+    current = ""
+
+    blocks = text.split("━━━━━━━━━━━━━━━")
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+
+        candidate = f"{current}\n━━━━━━━━━━━━━━━\n{block}" if current else block
+
+        if len(candidate) > chunk_size:
+            if current:
+                parts.append(current.strip())
+                current = block
+            else:
+                # Si un solo bloque supera el tamaño, lo corta en partes seguras.
+                for i in range(0, len(block), chunk_size):
+                    parts.append(block[i:i + chunk_size].strip())
+                current = ""
+        else:
+            current = candidate
+
+    if current:
+        parts.append(current.strip())
+
+    total = len(parts)
+    for i, part in enumerate(parts, start=1):
+        header = f"Parte {i}/{total}\n\n" if total > 1 else ""
+        await message.reply_text(header + part)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -2382,11 +2429,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if "inferno" in msg:
-        await update.message.reply_text(read_sheet("Hoja9"))
+        await send_long_message(update.message, read_sheet("Hoja9"))
         return
 
     if "partidos" in msg:
-        await update.message.reply_text(read_sheet("Hoja1"))
+        await send_long_message(update.message, read_sheet("Hoja1"))
         return
 
     if "hot predicciones" in msg or "picks" in msg or "predicciones" in msg:
@@ -2398,7 +2445,7 @@ async def handle_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query:
         return
     await query.answer()
-    await query.message.reply_text(read_sheet(query.data))
+    await send_long_message(query.message, read_sheet(query.data))
 
 async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
