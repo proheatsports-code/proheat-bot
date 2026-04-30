@@ -300,9 +300,45 @@ def is_user_active(user_data: Dict[str, Any]) -> bool:
     except Exception:
         return False
 
+def get_backend_bot_membership(user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Consulta el backend central para saber si el Telegram ID tiene membresía activa.
+    Si el backend no responde, devuelve None para permitir fallback local.
+    """
+    try:
+        url = f"{PROHEAT_API_BASE}/bot/membership/{user_id}"
+        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict):
+            return data
+        return None
+    except Exception as e:
+        logger.warning("No se pudo consultar membresía Telegram en backend para %s: %s", user_id, e)
+        return None
+
+def is_backend_membership_active(user_id: int) -> bool:
+    data = get_backend_bot_membership(user_id)
+    if data is None:
+        return False
+    status = str(data.get("membership") or data.get("status") or "").lower().strip()
+    return status == "active"
+
 def is_allowed(user_id: int) -> bool:
     if is_admin(user_id):
         return True
+
+    # Fuente principal: backend central ProHeat.
+    backend_data = get_backend_bot_membership(user_id)
+    if backend_data is not None:
+        status = str(backend_data.get("membership") or backend_data.get("status") or "").lower().strip()
+        if status == "active":
+            return True
+        # Si el backend respondió, respetamos su estado como fuente principal.
+        if status in {"inactive", "expired", "pending"}:
+            return False
+
+    # Respaldo local para no romper usuarios aprobados si el backend falla.
     users = load_users()
     return is_user_active(users.get(str(user_id)))
 
