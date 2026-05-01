@@ -2119,11 +2119,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     if not is_allowed(user_id):
+        pay_url = f"{PROHEAT_API_BASE}/bot/pay?telegram_id={user_id}"
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💳 Ir a pagar / ver métodos", url=pay_url)],
+            [InlineKeyboardButton("🌐 Ir a la página web", url="https://proheatsports.com")],
+        ])
+
         await update.message.reply_text(
             "💎 PROHEAT SPORTS PREMIUM\n\n"
-            "Acceso mensual: $100 MXN\n\n"
-            "Envía comprobante en imagen\n\n"
-            "Usa /myid"
+            "Acceso mensual: $160 MXN\n\n"
+            "Puedes pagar con PayPal o transferencia bancaria.\n"
+            "Tu acceso se activará automáticamente si pagas con PayPal.\n\n"
+            f"🆔 Tu ID: {user_id}",
+            reply_markup=keyboard
         )
         return
 
