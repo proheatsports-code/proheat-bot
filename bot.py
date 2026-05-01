@@ -68,7 +68,7 @@ SPORT_IA_CACHE_FILE = os.getenv("SPORT_IA_CACHE_FILE", "sport_ia_cache.json")
 # =========================
 # LÍMITE EDITABLE PROHEAT SPORT IA
 # =========================
-SPORT_IA_DAILY_LIMIT = int(os.getenv("SPORT_IA_DAILY_LIMIT", "10"))
+SPORT_IA_DAILY_LIMIT = int(os.getenv("SPORT_IA_DAILY_LIMIT", "4"))
 
 NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "6"))
 MAX_NEWS_ITEMS = int(os.getenv("MAX_NEWS_ITEMS", "8"))
